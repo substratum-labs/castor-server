@@ -1,0 +1,70 @@
+"""SQLAlchemy ORM models for agents, sessions, and events."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import JSON, DateTime, Integer, String, Text, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class AgentRow(Base):
+    __tablename__ = "agents"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_config_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    system: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tools_json: Mapped[list] = mapped_column(JSON, default=list)
+    mcp_servers_json: Mapped[list] = mapped_column(JSON, default=list)
+    skills_json: Mapped[list] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SessionRow(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    environment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="idle", nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    resources_json: Mapped[list] = mapped_column(JSON, default=list)
+    vault_ids_json: Mapped[list] = mapped_column(JSON, default=list)
+    stats_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    usage_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    checkpoint_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class EventRow(Base):
+    __tablename__ = "events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
