@@ -1,8 +1,13 @@
-"""Agent function builder — Ring 3 logic that runs inside the Castor kernel.
+"""Agent function builder — standard LLM-tool loop (convenience layer).
 
-The agent function is a closure that implements the Anthropic-style LLM-tool
-loop using kernel syscalls.  It also emits SSE events via the EventBus at
-each step (Ring 3 freedom — not a syscall, not logged, skipped on replay).
+This is a convenience helper that implements the Anthropic-style ReAct
+pattern (LLM → parse tool calls → execute → loop) using kernel syscalls.
+It is NOT a kernel feature — it doesn't belong to any Ring.  It's a
+reusable template that castor-server uses to provide Anthropic API
+compatibility.
+
+The function also emits SSE events via the EventBus at each step
+(skipped during replay via proxy.is_replaying).
 
 Protocol layering for custom tools:
 - Server layer (Ring 2): manages SSE push + client interaction
