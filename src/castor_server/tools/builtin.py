@@ -226,3 +226,183 @@ async def execute_builtin_tool(name: str, params: dict[str, Any]) -> str:
     if name not in _TOOL_DISPATCH:
         raise ValueError(f"Unknown built-in tool: {name}")
     return await _TOOL_DISPATCH[name](params)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI function-calling format specs (for LLM tool_choice)
+# ---------------------------------------------------------------------------
+
+BUILTIN_TOOL_SPECS: dict[str, dict[str, Any]] = {
+    "bash": {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute a bash command in a shell session.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to execute.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds.",
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    "read": {
+        "type": "function",
+        "function": {
+            "name": "read",
+            "description": "Read a file from the filesystem.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute path to the file to read.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Line number to start reading from.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of lines to read.",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    "write": {
+        "type": "function",
+        "function": {
+            "name": "write",
+            "description": "Write content to a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute path to the file.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to write.",
+                    },
+                },
+                "required": ["file_path", "content"],
+            },
+        },
+    },
+    "edit": {
+        "type": "function",
+        "function": {
+            "name": "edit",
+            "description": "Perform string replacement in a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute path to the file.",
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "The text to replace.",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "The replacement text.",
+                    },
+                },
+                "required": ["file_path", "old_string", "new_string"],
+            },
+        },
+    },
+    "glob": {
+        "type": "function",
+        "function": {
+            "name": "glob",
+            "description": "Find files matching a glob pattern.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern (e.g. '**/*.py').",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to search in.",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    "grep": {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": "Search file contents using regex.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regex pattern to search for.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory to search.",
+                    },
+                    "include": {
+                        "type": "string",
+                        "description": "Glob to filter files (e.g. '*.py').",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    "web_fetch": {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch content from a URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to fetch.",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    "web_search": {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for information.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+}
