@@ -113,3 +113,39 @@ class SessionListResponse(BaseModel):
 class SessionDeletedResponse(BaseModel):
     id: str
     type: Literal["session_deleted"] = "session_deleted"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Castor extensions
+# ---------------------------------------------------------------------------
+
+
+class ForkRequest(BaseModel):
+    at_step: int = Field(..., ge=0, description="Rewind to this syscall step index")
+
+
+class BudgetItem(BaseModel):
+    resource: str
+    max_budget: float
+    current_usage: float
+    remaining: float
+
+
+class BudgetResponse(BaseModel):
+    budgets: list[BudgetItem]
+
+
+class FlaggedStep(BaseModel):
+    index: int
+    tool_name: str
+    arguments: dict
+    response: object | None = None
+    reason: str
+
+
+class ScanResponse(BaseModel):
+    total_steps: int
+    auto_verified: int
+    flagged_count: int
+    flagged: list[FlaggedStep]
+    tools_used: dict[str, int]

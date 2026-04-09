@@ -52,11 +52,13 @@ def create_app() -> FastAPI:
     # Routes
     from castor_server.api.agents import router as agents_router
     from castor_server.api.events import router as events_router
+    from castor_server.api.extensions import router as extensions_router
     from castor_server.api.sessions import router as sessions_router
 
     app.include_router(agents_router)
     app.include_router(sessions_router)
     app.include_router(events_router)
+    app.include_router(extensions_router)
 
     # Health check
     @app.get("/health")

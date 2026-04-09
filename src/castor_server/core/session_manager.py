@@ -102,6 +102,7 @@ class SessionManager:
         tool_use_id: str,
         result: str,
         deny_message: str | None = None,
+        modify_feedback: str | None = None,
     ) -> None:
         """Process a user.tool_confirmation event (builtin tool HITL)."""
         lock = self._get_lock(session_id)
@@ -120,6 +121,8 @@ class SessionManager:
 
             if result == "allow":
                 await kernel.approve(kernel_cp)
+            elif result == "modify":
+                kernel.modify(kernel_cp, modify_feedback or "")
             else:
                 kernel.reject(kernel_cp, deny_message or "Tool use denied.")
 

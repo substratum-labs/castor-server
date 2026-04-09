@@ -26,5 +26,19 @@ class Settings(BaseSettings):
     )
     debug: bool = False
 
+    # Phase 2 — Castor extensions
+    default_llm_cost: float = Field(
+        default=0.03,
+        description="Default cost per LLM call for budget tracking",
+    )
+    default_budgets: dict[str, float] = Field(
+        default_factory=lambda: {"api_usd": 10.0},
+        description="Default budgets for new sessions",
+    )
+    enable_budgets: bool = Field(
+        default=False,
+        description="Enable budget enforcement for sessions",
+    )
+
 
 settings = Settings()

@@ -25,8 +25,9 @@ class UserInterrupt(BaseModel):
 class UserToolConfirmation(BaseModel):
     type: Literal["user.tool_confirmation"] = "user.tool_confirmation"
     tool_use_id: str
-    result: Literal["allow", "deny"]
+    result: Literal["allow", "deny", "modify"]
     deny_message: str | None = None
+    modify_feedback: str | None = None
 
 
 class UserCustomToolResult(BaseModel):

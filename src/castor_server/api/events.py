@@ -78,6 +78,7 @@ async def send_events(
                     event.tool_use_id,
                     event.result,
                     event.deny_message,
+                    event.modify_feedback,
                 )
             )
         elif isinstance(event, UserCustomToolResult):
