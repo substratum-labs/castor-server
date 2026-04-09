@@ -1,7 +1,13 @@
 """Built-in tools matching agent_toolset_20260401.
 
-Each tool is implemented as an async function. In production, these execute
-inside the session's working directory / sandbox.
+Each tool is an async function with typed parameters. The Castor kernel
+registers them via ToolMetadata.from_function() — we do NOT use @castor_tool
+here to avoid polluting the global default_registry.
+
+Destructive flags:
+  - bash, write, edit → destructive (can modify filesystem / run arbitrary code)
+  - read, glob, grep, web_fetch, web_search → non-destructive
+  - external_input → non-destructive (result injected by server layer)
 """
 
 from __future__ import annotations
@@ -14,27 +20,13 @@ from typing import Any
 
 import httpx
 
-BUILTIN_TOOL_NAMES = frozenset(
-    ["bash", "read", "write", "edit", "glob", "grep", "web_fetch", "web_search"]
-)
-
-
-async def execute_builtin_tool(name: str, params: dict[str, Any]) -> str:
-    """Dispatch to the appropriate built-in tool implementation."""
-    if name not in _TOOL_DISPATCH:
-        raise ValueError(f"Unknown built-in tool: {name}")
-    return await _TOOL_DISPATCH[name](params)
-
-
 # ---------------------------------------------------------------------------
-# Tool implementations
+# Tool implementations (typed parameters, no dict unpacking)
 # ---------------------------------------------------------------------------
 
 
-async def _tool_bash(params: dict[str, Any]) -> str:
-    command = params["command"]
-    timeout = params.get("timeout", 120)
-
+async def bash(command: str, timeout: int = 120) -> str:
+    """Execute a bash command in a shell session."""
     proc = await asyncio.create_subprocess_shell(
         command,
         stdout=asyncio.subprocess.PIPE,
@@ -54,11 +46,8 @@ async def _tool_bash(params: dict[str, Any]) -> str:
     return output
 
 
-async def _tool_read(params: dict[str, Any]) -> str:
-    file_path = params["file_path"]
-    offset = params.get("offset", 0)
-    limit = params.get("limit")
-
+async def read(file_path: str, offset: int = 0, limit: int | None = None) -> str:
+    """Read a file from the filesystem."""
     try:
         path = Path(file_path)
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -69,7 +58,6 @@ async def _tool_read(params: dict[str, Any]) -> str:
         if limit is not None:
             lines = lines[:limit]
 
-        # Format with line numbers
         result_lines = []
         start = offset if offset > 0 else 0
         for i, line in enumerate(lines, start=start + 1):
@@ -81,10 +69,8 @@ async def _tool_read(params: dict[str, Any]) -> str:
         return f"Error reading file: {e}"
 
 
-async def _tool_write(params: dict[str, Any]) -> str:
-    file_path = params["file_path"]
-    content = params["content"]
-
+async def write(file_path: str, content: str) -> str:
+    """Write content to a file."""
     try:
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,11 +80,8 @@ async def _tool_write(params: dict[str, Any]) -> str:
         return f"Error writing file: {e}"
 
 
-async def _tool_edit(params: dict[str, Any]) -> str:
-    file_path = params["file_path"]
-    old_string = params["old_string"]
-    new_string = params["new_string"]
-
+async def edit(file_path: str, old_string: str, new_string: str) -> str:
+    """Perform string replacement in a file."""
     try:
         path = Path(file_path)
         text = path.read_text(encoding="utf-8")
@@ -121,12 +104,10 @@ async def _tool_edit(params: dict[str, Any]) -> str:
         return f"Error editing file: {e}"
 
 
-async def _tool_glob(params: dict[str, Any]) -> str:
-    pattern = params["pattern"]
-    search_path = params.get("path", ".")
-
+async def glob(pattern: str, path: str = ".") -> str:
+    """Find files matching a glob pattern."""
     try:
-        full_pattern = os.path.join(search_path, pattern)
+        full_pattern = os.path.join(path, pattern)
         matches = sorted(globlib.glob(full_pattern, recursive=True))
         if not matches:
             return "No files matched the pattern."
@@ -135,16 +116,13 @@ async def _tool_glob(params: dict[str, Any]) -> str:
         return f"Error: {e}"
 
 
-async def _tool_grep(params: dict[str, Any]) -> str:
-    pattern = params["pattern"]
-    search_path = params.get("path", ".")
-    include = params.get("include")
-
+async def grep(pattern: str, path: str = ".", include: str | None = None) -> str:
+    """Search file contents using regex."""
     try:
         cmd = ["grep", "-rn", "--color=never"]
         if include:
             cmd.extend(["--include", include])
-        cmd.extend([pattern, search_path])
+        cmd.extend([pattern, path])
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -155,7 +133,6 @@ async def _tool_grep(params: dict[str, Any]) -> str:
         output = stdout.decode("utf-8", errors="replace")
         if not output:
             return "No matches found."
-        # Limit output
         lines = output.splitlines()
         if len(lines) > 200:
             return "\n".join(lines[:200]) + f"\n... ({len(lines) - 200} more lines)"
@@ -166,8 +143,8 @@ async def _tool_grep(params: dict[str, Any]) -> str:
         return f"Error: {e}"
 
 
-async def _tool_web_fetch(params: dict[str, Any]) -> str:
-    url = params["url"]
+async def web_fetch(url: str) -> str:
+    """Fetch content from a URL."""
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
             resp = await client.get(url)
@@ -175,7 +152,6 @@ async def _tool_web_fetch(params: dict[str, Any]) -> str:
             is_text = any(t in content_type for t in ("text", "json", "xml"))
             if is_text:
                 text = resp.text
-                # Limit to ~100KB
                 if len(text) > 100_000:
                     text = text[:100_000] + "\n... (truncated)"
                 return text
@@ -185,10 +161,8 @@ async def _tool_web_fetch(params: dict[str, Any]) -> str:
         return f"Error fetching URL: {e}"
 
 
-async def _tool_web_search(params: dict[str, Any]) -> str:
-    query = params["query"]
-    # Web search requires an external search API.
-    # Return a stub response indicating the tool is available but needs configuration.
+async def web_search(query: str) -> str:
+    """Search the web for information."""
     return (
         f"Web search for: {query}\n"
         "Note: Web search requires configuration of a search API backend "
@@ -197,17 +171,58 @@ async def _tool_web_search(params: dict[str, Any]) -> str:
     )
 
 
+async def external_input(payload: dict[str, Any] | None = None) -> str:
+    """Receive external input (e.g., custom tool results from client).
+
+    This tool is used as the kernel-layer representation of custom tools.
+    The server layer handles the full Anthropic custom tool semantics;
+    the kernel only sees this simplified syscall.
+
+    In normal execution this tool suspends for HITL (the server injects the
+    client result into the checkpoint). During replay the cached result is
+    returned directly.
+    """
+    # This body only runs if the kernel executes it directly (shouldn't
+    # happen in the normal custom-tool flow where HITL suspend/inject is used).
+    return ""
+
+
 # ---------------------------------------------------------------------------
-# Dispatch table
+# Exports for kernel registration
+# ---------------------------------------------------------------------------
+
+#: Tools to pass to Castor(tools=[...]).  The kernel creates its own registry.
+BUILTIN_TOOLS: list = [bash, read, write, edit, glob, grep, web_fetch, web_search]
+
+#: Tools that should be marked destructive when registering with the kernel.
+DESTRUCTIVE_TOOL_NAMES: frozenset[str] = frozenset(["bash", "write", "edit"])
+
+BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
+    ["bash", "read", "write", "edit", "glob", "grep", "web_fetch", "web_search"]
+)
+
+# ---------------------------------------------------------------------------
+# Backward-compatible dispatch (used by existing tests and Phase 1 code)
 # ---------------------------------------------------------------------------
 
 _TOOL_DISPATCH: dict[str, Any] = {
-    "bash": _tool_bash,
-    "read": _tool_read,
-    "write": _tool_write,
-    "edit": _tool_edit,
-    "glob": _tool_glob,
-    "grep": _tool_grep,
-    "web_fetch": _tool_web_fetch,
-    "web_search": _tool_web_search,
+    "bash": lambda params: bash(**params),
+    "read": lambda params: read(**params),
+    "write": lambda params: write(**params),
+    "edit": lambda params: edit(**params),
+    "glob": lambda params: glob(**params),
+    "grep": lambda params: grep(**params),
+    "web_fetch": lambda params: web_fetch(**params),
+    "web_search": lambda params: web_search(**params),
 }
+
+
+async def execute_builtin_tool(name: str, params: dict[str, Any]) -> str:
+    """Dispatch to the appropriate built-in tool implementation.
+
+    Backward-compatible entry point: accepts a dict of params and unpacks
+    them into the typed function signature.
+    """
+    if name not in _TOOL_DISPATCH:
+        raise ValueError(f"Unknown built-in tool: {name}")
+    return await _TOOL_DISPATCH[name](params)
