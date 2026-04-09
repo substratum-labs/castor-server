@@ -68,8 +68,8 @@ def build_agent_fn(
             # -- LLM call --
             llm_messages = _build_llm_messages(agent, conversation)
 
+            span_start = SpanModelRequestStart()
             if not proxy.is_replaying:
-                span_start = SpanModelRequestStart()
                 await _emit(bus, db, session_id, span_start)
 
             response = await proxy.syscall(
