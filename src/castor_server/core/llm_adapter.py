@@ -70,3 +70,27 @@ async def litellm_chat(
             )
 
     return result
+
+
+async def litellm_chat_for_kernel(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+    temperature: float = 0.0,
+    max_tokens: int = 16384,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Kernel-compatible LLM callable.
+
+    Same as ``litellm_chat`` but with a signature that matches what
+    ``LLMSyscall.infer()`` forwards as keyword arguments through the proxy.
+    """
+    return await litellm_chat(
+        model=model,
+        messages=messages,
+        tools=tools,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        **kwargs,
+    )
