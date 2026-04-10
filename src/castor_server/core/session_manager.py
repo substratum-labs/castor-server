@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from castor_server.core.agent_fn import build_agent_fn
 from castor_server.core.event_bus import EventBus
 from castor_server.core.kernel_adapter import build_kernel_for_agent
+from castor_server.core.mcp_runtime import discover_mcp_tools
 from castor_server.core.sandbox_manager import sandbox_manager
 from castor_server.models.agents import AgentResponse
 from castor_server.models.events import (
@@ -52,6 +53,9 @@ class SessionManager:
         # kernel suspends for HITL. NOT persisted — the kernel checkpoint
         # is the authoritative resume state.
         self._latest_conversation_by_session: dict[str, list[dict[str, Any]]] = {}
+        # Per-session MCP tool discovery cache. Populated lazily on the
+        # first kernel run for a session and reused across turns.
+        self._mcp_tools_by_session: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._background_tasks: set[asyncio.Task] = set()
 
     def get_bus(self, session_id: str) -> EventBus:
@@ -291,6 +295,10 @@ class SessionManager:
         # _save_checkpoint see the right state.
         latest_conversation: list[dict[str, Any]] = []
 
+        # Discover MCP tools so the agent loop can offer them to the LLM.
+        # Cached per session to avoid re-discovering on every turn.
+        mcp_tools_by_server = await self._get_mcp_tools(session_id, agent)
+
         agent_fn = build_agent_fn(
             agent=agent,
             messages=messages,
@@ -298,6 +306,7 @@ class SessionManager:
             db=db,
             session_id=session_id,
             latest_conversation=latest_conversation,
+            mcp_tools_by_server=mcp_tools_by_server,
         )
 
         # Set up sandbox context if session has an environment.
@@ -474,6 +483,29 @@ class SessionManager:
             # Stop at the first assistant message — older ones are stale.
             return None
         return None
+
+    # ------------------------------------------------------------------
+    # Internal — MCP tool discovery
+    # ------------------------------------------------------------------
+
+    async def _get_mcp_tools(
+        self, session_id: str, agent: AgentResponse
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Discover (and cache) MCP tools for the agent's mcp_servers.
+
+        First call for a session connects to each MCP server and lists
+        its tools; subsequent calls return the cached result. Discovery
+        failures are logged inside ``discover_mcp_tools`` and the failing
+        servers are simply omitted from the returned dict.
+        """
+        if session_id in self._mcp_tools_by_session:
+            return self._mcp_tools_by_session[session_id]
+        if not agent.mcp_servers:
+            self._mcp_tools_by_session[session_id] = {}
+            return {}
+        tools = await discover_mcp_tools(agent.mcp_servers)
+        self._mcp_tools_by_session[session_id] = tools
+        return tools
 
     # ------------------------------------------------------------------
     # Internal — status events

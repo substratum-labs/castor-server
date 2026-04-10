@@ -107,6 +107,25 @@ class AgentCustomToolUseEvent(BaseModel):
     processed_at: str = Field(default_factory=now_rfc3339)
 
 
+class AgentMCPToolUseEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["agent.mcp_tool_use"] = "agent.mcp_tool_use"
+    name: str
+    mcp_server_name: str
+    input: dict[str, Any] = Field(default_factory=dict)
+    evaluated_permission: Literal["allow", "ask", "deny"] | None = None
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
+class AgentMCPToolResultEvent(_OmitNoneMixin):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["agent.mcp_tool_result"] = "agent.mcp_tool_result"
+    mcp_tool_use_id: str
+    content: list[TextBlock] | None = None
+    is_error: bool = False
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
 # ---------------------------------------------------------------------------
 # Session events
 # ---------------------------------------------------------------------------

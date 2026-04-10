@@ -13,6 +13,7 @@ from typing import Any
 from castor.core import Castor
 
 from castor_server.core.llm_adapter import litellm_chat_for_kernel
+from castor_server.core.mcp_runtime import call_mcp_tool
 from castor_server.models.agents import AgentResponse, AgentToolset, ModelConfig
 from castor_server.tools.builtin import (
     BUILTIN_TOOL_NAMES,
@@ -20,6 +21,24 @@ from castor_server.tools.builtin import (
     DESTRUCTIVE_TOOL_NAMES,
     external_input,
 )
+
+
+async def mcp_call(
+    mcp_server_url: str = "",
+    tool_name: str = "",
+    arguments: dict[str, Any] | None = None,
+) -> str:
+    """Kernel-registered tool that proxies a single MCP tool invocation.
+
+    All MCP tool calls in agent_fn route through this single syscall so
+    that the kernel's syscall_log captures them for replay. Each call
+    opens a transient streamable HTTP session to the MCP server.
+    """
+    return await call_mcp_tool(
+        mcp_server_url=mcp_server_url,
+        tool_name=tool_name,
+        arguments=arguments or {},
+    )
 
 
 def build_kernel_for_agent(agent: AgentResponse) -> Castor:
@@ -38,7 +57,7 @@ def build_kernel_for_agent(agent: AgentResponse) -> Castor:
     llm_callable = _make_llm_callable(model_id)
 
     return Castor(
-        tools=[*enabled_tools, external_input],
+        tools=[*enabled_tools, external_input, mcp_call],
         destructive=hitl_tool_names,
         llm=llm_callable,
         llm_cost=0.03,

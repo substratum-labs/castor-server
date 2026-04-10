@@ -26,10 +26,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from castor_server.core.event_bus import EventBus
 from castor_server.core.kernel_adapter import resolve_hitl_tools
+from castor_server.core.mcp_runtime import (
+    McpToolSpec,
+    find_mcp_server_for_tool,
+    get_server_url,
+)
 from castor_server.models.agents import AgentResponse, ModelConfig
 from castor_server.models.common import TextBlock
 from castor_server.models.events import (
     AgentCustomToolUseEvent,
+    AgentMCPToolResultEvent,
+    AgentMCPToolUseEvent,
     AgentMessageEvent,
     AgentToolResultEvent,
     AgentToolUseEvent,
@@ -53,6 +60,7 @@ def build_agent_fn(
     db: AsyncSession,
     session_id: str,
     latest_conversation: list[dict[str, Any]] | None = None,
+    mcp_tools_by_server: dict[str, list[McpToolSpec]] | None = None,
 ) -> Callable[[SyscallProxy], Any]:
     """Build a kernel-compatible agent function as a closure.
 
@@ -65,10 +73,30 @@ def build_agent_fn(
     rebuilds it each turn (clears + extends) so it does NOT affect replay
     determinism — only the immutable ``messages`` argument feeds the
     kernel's syscall journal.
+
+    ``mcp_tools_by_server`` is an optional dict from
+    ``mcp_server_name`` → list of tool specs (in OpenAI function format)
+    discovered from the agent's configured MCP servers. These are merged
+    into the tool list sent to the LLM, and tool calls that match an
+    MCP tool name are routed through the kernel's ``mcp_call`` syscall.
     """
+    mcp_tools_by_server = mcp_tools_by_server or {}
     model_id = agent.model.id if isinstance(agent.model, ModelConfig) else agent.model
     tool_specs = _build_tools_for_llm(agent)
+    # Append discovered MCP tools so the LLM sees them.
+    for server_specs in mcp_tools_by_server.values():
+        for spec in server_specs:
+            # Strip our private routing key before sending to the LLM —
+            # OpenAI/Anthropic schemas don't allow extra top-level keys.
+            llm_spec = {k: v for k, v in spec.items() if not k.startswith("_")}
+            tool_specs.append(llm_spec)
     custom_tool_names = _get_custom_tool_names(agent)
+    mcp_tool_names: set[str] = set()
+    for specs in mcp_tools_by_server.values():
+        for spec in specs:
+            name = spec.get("function", {}).get("name")
+            if name:
+                mcp_tool_names.add(name)
     # Tools the kernel will suspend on for HITL approval. Used to set
     # ``evaluated_permission`` on agent.tool_use events so SDK clients can
     # tell which calls need a user.tool_confirmation.
@@ -158,7 +186,43 @@ def build_agent_fn(
                 tool_input = block["input"]
                 tool_id = block["id"]
 
-                if tool_name in custom_tool_names:
+                if tool_name in mcp_tool_names:
+                    # MCP tool — route through the kernel's mcp_call
+                    # syscall so the call goes through the journal and
+                    # replays correctly. Emit MCP-specific events with
+                    # mcp_server_name so SDK clients can distinguish.
+                    server_name = (
+                        find_mcp_server_for_tool(mcp_tools_by_server, tool_name) or ""
+                    )
+                    server_url = get_server_url(agent, server_name) or ""
+
+                    if not proxy.is_replaying:
+                        mcp_evt = AgentMCPToolUseEvent(
+                            name=tool_name,
+                            mcp_server_name=server_name,
+                            input=tool_input,
+                            evaluated_permission="allow",
+                        )
+                        mcp_evt.id = tool_id
+                        await _emit(bus, db, session_id, mcp_evt)
+
+                    result = await proxy.syscall(
+                        "mcp_call",
+                        {
+                            "mcp_server_url": server_url,
+                            "tool_name": tool_name,
+                            "arguments": tool_input,
+                        },
+                    )
+
+                    if not proxy.is_replaying:
+                        mcp_result_evt = AgentMCPToolResultEvent(
+                            mcp_tool_use_id=tool_id,
+                            content=[TextBlock(text=str(result))],
+                        )
+                        await _emit(bus, db, session_id, mcp_result_evt)
+
+                elif tool_name in custom_tool_names:
                     # Protocol layering: server layer event + kernel syscall
                     if not proxy.is_replaying:
                         custom_evt = AgentCustomToolUseEvent(
