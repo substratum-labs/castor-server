@@ -1,0 +1,39 @@
+# castor-server: one-line self-hosted Anthropic Managed Agents API.
+#
+# Usage:
+#   docker compose up -d
+#
+# Build context is the parent directory so the build can pull in
+# ../roche (the roche-sandbox local editable dependency).
+
+services:
+  castor-server:
+    build:
+      context: ..
+      dockerfile: castor-server/Dockerfile
+    image: castor/server:latest
+    container_name: castor-server
+    restart: unless-stopped
+    ports:
+      - "${CASTOR_PORT:-8080}:8080"
+    environment:
+      # LLM provider keys — set whichever you use. With none of these
+      # set, only the built-in `mock` model works.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      # Server config — uncomment to override defaults.
+      # CASTOR_API_KEY: "${CASTOR_API_KEY:-}"
+      # CASTOR_DEBUG: "false"
+    volumes:
+      # SQLite database persistence
+      - castor-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  castor-data:

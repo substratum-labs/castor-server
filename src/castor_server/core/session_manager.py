@@ -300,13 +300,22 @@ class SessionManager:
             latest_conversation=latest_conversation,
         )
 
-        # Set up sandbox context if session has an environment
+        # Set up sandbox context if session has an environment.
+        # Resources (e.g. github_repository) are mounted on first
+        # creation only — sandbox_manager caches the sandbox per
+        # session_id and skips re-mounting on subsequent calls.
         sandbox_token = None
         session_data = await repo.get_session(db, session_id)
         if session_data and session_data.environment_id:
             env = await repo.get_environment(db, session_data.environment_id)
             if env:
-                sbx = await sandbox_manager.get_or_create(session_id, env)
+                resources = [
+                    r if isinstance(r, dict) else r.model_dump(exclude_none=True)
+                    for r in (session_data.resources or [])
+                ]
+                sbx = await sandbox_manager.get_or_create(
+                    session_id, env, resources=resources
+                )
                 sandbox_token = set_sandbox(sbx)
 
         try:

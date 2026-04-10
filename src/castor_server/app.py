@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
     from castor_server.api.environments import router as environments_router
     from castor_server.api.events import router as events_router
     from castor_server.api.extensions import router as extensions_router
+    from castor_server.api.models import router as models_router
     from castor_server.api.sessions import router as sessions_router
 
     auth_deps = [Depends(require_api_key)]
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(sessions_router, dependencies=auth_deps)
     app.include_router(events_router, dependencies=auth_deps)
     app.include_router(extensions_router, dependencies=auth_deps)
+    app.include_router(models_router, dependencies=auth_deps)
 
     # Health check (no auth — used for monitoring/load balancers)
     @app.get("/health")
