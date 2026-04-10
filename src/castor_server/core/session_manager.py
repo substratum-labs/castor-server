@@ -106,6 +106,8 @@ class SessionManager:
         modify_feedback: str | None = None,
     ) -> None:
         """Process a user.tool_confirmation event (builtin tool HITL)."""
+        from castor_server.tools.builtin import clear_sandbox, set_sandbox
+
         lock = self._get_lock(session_id)
         async with lock:
             session = await repo.get_session(db, session_id)
@@ -120,12 +122,24 @@ class SessionManager:
 
             kernel = build_kernel_for_agent(session.agent)
 
-            if result == "allow":
-                await kernel.approve(kernel_cp)
-            elif result == "modify":
-                kernel.modify(kernel_cp, modify_feedback or "")
-            else:
-                kernel.reject(kernel_cp, deny_message or "Tool use denied.")
+            # Set up sandbox context BEFORE approve (which executes the tool)
+            sandbox_token = None
+            if session.environment_id:
+                env = await repo.get_environment(db, session.environment_id)
+                if env:
+                    sbx = await sandbox_manager.get_or_create(session_id, env)
+                    sandbox_token = set_sandbox(sbx)
+
+            try:
+                if result == "allow":
+                    await kernel.approve(kernel_cp)
+                elif result == "modify":
+                    kernel.modify(kernel_cp, modify_feedback or "")
+                else:
+                    kernel.reject(kernel_cp, deny_message or "Tool use denied.")
+            finally:
+                if sandbox_token is not None:
+                    clear_sandbox(sandbox_token)
 
             # Emit running and resume
             await self._emit_running(db, session_id, bus)
