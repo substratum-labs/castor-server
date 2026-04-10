@@ -18,9 +18,16 @@ class Settings(BaseSettings):
     default_model: str = "claude-sonnet-4-6"
     litellm_model_map: dict[str, str] = Field(
         default_factory=lambda: {
-            "claude-sonnet-4-6": "openrouter/anthropic/claude-sonnet-4",
-            "claude-opus-4-6": "openrouter/anthropic/claude-opus-4",
-            "claude-haiku-4-5": "openrouter/anthropic/claude-3.5-haiku",
+            # Default to native Anthropic provider — most users targeting
+            # the Anthropic SDK already have ANTHROPIC_API_KEY set, so this
+            # gives them a zero-config working path. Override via env if you
+            # want to route through OpenRouter or another provider.
+            "claude-sonnet-4-6": "anthropic/claude-sonnet-4-5",
+            "claude-opus-4-6": "anthropic/claude-opus-4-5",
+            "claude-haiku-4-5": "anthropic/claude-haiku-4-5-20251001",
+            # "mock" — built-in echo model for offline / first-run / CI demos.
+            # Handled specially in llm_adapter.litellm_chat (no LiteLLM call).
+            "mock": "mock",
         },
         description="Map from Anthropic model IDs to LiteLLM model strings",
     )

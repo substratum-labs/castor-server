@@ -29,6 +29,12 @@ async def litellm_chat(
     """Call LiteLLM acompletion and return an Anthropic-compatible response dict."""
     litellm_model = settings.litellm_model_map.get(model, model)
 
+    # Built-in mock model — no external API call. Returns a deterministic
+    # echo of the last user message. Used for offline demos, CI, and first-run
+    # validation when the user has no LLM API key set.
+    if litellm_model == "mock":
+        return _mock_chat_response(messages)
+
     call_kwargs: dict[str, Any] = {
         "model": litellm_model,
         "messages": messages,
@@ -70,6 +76,37 @@ async def litellm_chat(
             )
 
     return result
+
+
+def _mock_chat_response(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a deterministic fake LLM response for the built-in mock model.
+
+    Echoes the last user message back, prefixed with [mock]. Always finishes
+    with stop_reason="end_turn" so the agent loop terminates after one turn.
+    Returns zero token usage so budget tracking sees the call as free.
+    """
+    last_user = next(
+        (m for m in reversed(messages) if m.get("role") == "user"),
+        None,
+    )
+    if last_user is None:
+        text = "[mock] no user message in context"
+    else:
+        content = last_user.get("content", "")
+        if isinstance(content, list):
+            # Multi-block content — concatenate text blocks
+            content = " ".join(
+                b.get("text", "") for b in content if b.get("type") == "text"
+            )
+        text = f"[mock] echo: {content}"
+
+    logger.info("mock_chat messages=%d echo_len=%d", len(messages), len(text))
+    return {
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+    }
 
 
 async def litellm_chat_for_kernel(
