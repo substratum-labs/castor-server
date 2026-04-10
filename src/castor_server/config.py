@@ -18,9 +18,9 @@ class Settings(BaseSettings):
     default_model: str = "claude-sonnet-4-6"
     litellm_model_map: dict[str, str] = Field(
         default_factory=lambda: {
-            "claude-sonnet-4-6": "anthropic/claude-sonnet-4-6",
-            "claude-opus-4-6": "anthropic/claude-opus-4-6",
-            "claude-haiku-4-5": "anthropic/claude-haiku-4-5-20251001",
+            "claude-sonnet-4-6": "openrouter/anthropic/claude-sonnet-4",
+            "claude-opus-4-6": "openrouter/anthropic/claude-opus-4",
+            "claude-haiku-4-5": "openrouter/anthropic/claude-3.5-haiku",
         },
         description="Map from Anthropic model IDs to LiteLLM model strings",
     )

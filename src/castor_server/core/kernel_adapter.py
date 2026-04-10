@@ -128,13 +128,11 @@ def _make_llm_callable(model_id: str) -> Callable[..., Any]:
         model: str = "",
         messages: list[dict[str, Any]] | None = None,
         tools: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
     ) -> dict[str, Any]:
         return await litellm_chat_for_kernel(
             model=model or model_id,
             messages=messages or [],
             tools=tools,
-            **kwargs,
         )
 
     return llm_callable
