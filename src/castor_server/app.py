@@ -21,6 +21,10 @@ async def lifespan(app: FastAPI):
     )
     await init_db()
     yield
+    # Cleanup: destroy all active sandboxes
+    from castor_server.core.sandbox_manager import sandbox_manager
+
+    await sandbox_manager.destroy_all()
 
 
 def create_app() -> FastAPI:

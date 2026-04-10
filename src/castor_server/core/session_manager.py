@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from castor_server.core.agent_fn import build_agent_fn
 from castor_server.core.event_bus import EventBus
 from castor_server.core.kernel_adapter import build_kernel_for_agent
+from castor_server.core.sandbox_manager import sandbox_manager
 from castor_server.models.agents import AgentResponse
 from castor_server.models.events import (
     SessionError,
@@ -214,6 +215,8 @@ class SessionManager:
         messages: list[dict[str, Any]],
     ) -> AgentCheckpoint:
         """Build kernel + agent function, execute via kernel.run()."""
+        from castor_server.tools.builtin import clear_sandbox, set_sandbox
+
         kernel = build_kernel_for_agent(agent)
 
         agent_fn = build_agent_fn(
@@ -223,6 +226,15 @@ class SessionManager:
             db=db,
             session_id=session_id,
         )
+
+        # Set up sandbox context if session has an environment
+        sandbox_token = None
+        session_data = await repo.get_session(db, session_id)
+        if session_data and session_data.environment_id:
+            env = await repo.get_environment(db, session_data.environment_id)
+            if env:
+                sbx = await sandbox_manager.get_or_create(session_id, env)
+                sandbox_token = set_sandbox(sbx)
 
         try:
             kernel_cp = await kernel.run(agent_fn, checkpoint=kernel_cp)
@@ -260,6 +272,9 @@ class SessionManager:
                 )
             else:
                 kernel_cp.status = "FAILED"
+        finally:
+            if sandbox_token is not None:
+                clear_sandbox(sandbox_token)
 
         return kernel_cp
 

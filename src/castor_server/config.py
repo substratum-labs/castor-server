@@ -40,5 +40,15 @@ class Settings(BaseSettings):
         description="Enable budget enforcement for sessions",
     )
 
+    # Roche sandbox settings
+    roche_provider: str = Field(
+        default="docker",
+        description="Roche sandbox provider (docker, wasm, firecracker)",
+    )
+    roche_daemon_port: int | None = Field(
+        default=None,
+        description="Roche daemon gRPC port (auto-detect if None)",
+    )
+
 
 settings = Settings()
