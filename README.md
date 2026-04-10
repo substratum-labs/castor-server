@@ -71,16 +71,75 @@ from anthropic import Anthropic
 # This is the only line you change.
 client = Anthropic(base_url="http://localhost:8080", api_key="local")
 
-# The rest of your code is unchanged.
-agent = client.beta.managed_agents.agents.create(
+# Everything else uses the standard anthropic SDK.
+env = client.beta.environments.create(name="my-env")
+agent = client.beta.agents.create(
     name="my-helper",
     model="claude-sonnet-4-6",
     system="You are a helpful assistant.",
     tools=[{"type": "agent_toolset_20260401"}],
 )
-session = client.beta.managed_agents.sessions.create(agent=agent.id)
-# ...
+session = client.beta.sessions.create(agent=agent.id, environment_id=env.id)
+client.beta.sessions.events.send(
+    session_id=session.id,
+    events=[{
+        "type": "user.message",
+        "content": [{"type": "text", "text": "Hello!"}],
+    }],
+)
+history = client.beta.sessions.events.list(session_id=session.id)
 ```
+
+**Verified compatible with `anthropic-python` 0.93.0** for all CRUD operations
+(`agents.*`, `environments.*`, `sessions.*`, `sessions.events.send/.list`).
+See `scripts/sdk_check.py` for the full validation.
+
+### Streaming events (SDK workaround required)
+
+The `client.beta.sessions.events.stream()` method in `anthropic-python` 0.93.0
+is broken — its internal `Stream` class is hardcoded for the Messages API
+event names (`message_start`, `content_block_*`, etc.) and silently drops
+managed agents events (`session.status_*`, `agent.message`, etc.).
+This affects every server, including `api.anthropic.com`. Track upstream
+fix: anthropics/anthropic-sdk-python.
+
+**Workaround #1 — built-in helper (recommended):**
+
+```python
+from castor_server.client import stream_events  # also: astream_events
+
+for event in stream_events(
+    base_url="http://localhost:8080",
+    session_id=session.id,
+    api_key="local",
+):
+    print(event["type"], event)
+    if event["type"] == "session.status_idle":
+        break
+```
+
+**Workaround #2 — raw httpx (zero dependency):**
+
+```python
+import httpx, json
+
+with httpx.stream(
+    "GET",
+    f"http://localhost:8080/v1/sessions/{session.id}/events/stream",
+    headers={"x-api-key": "local"},
+    timeout=60,
+) as r:
+    for line in r.iter_lines():
+        if line.startswith("data:"):
+            event = json.loads(line[5:])
+            print(event)
+            if event["type"] == "session.status_idle":
+                break
+```
+
+**Workaround #3 — polling:** `client.beta.sessions.events.list(session_id=...)`
+works fine via the SDK and returns the full event history. Poll on a timer
+if you don't need real-time updates.
 
 ## Why use castor-server
 
