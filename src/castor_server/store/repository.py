@@ -10,13 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from castor_server.models.agents import AgentResponse
 from castor_server.models.common import ModelConfig, gen_id
+from castor_server.models.environments import EnvironmentResponse
 from castor_server.models.sessions import (
     SessionResponse,
     SessionStats,
     SessionUsage,
 )
 
-from .db_models import AgentRow, EventRow, SessionRow
+from .db_models import AgentRow, EnvironmentRow, EventRow, SessionRow
 
 # ---------------------------------------------------------------------------
 # Agents
@@ -448,3 +449,135 @@ async def list_events(
     stmt = stmt.limit(limit)
     result = await db.execute(stmt)
     return [row.data_json for row in result.scalars().all()]
+
+
+# ---------------------------------------------------------------------------
+# Environments
+# ---------------------------------------------------------------------------
+
+
+def _env_row_to_response(row: EnvironmentRow) -> EnvironmentResponse:
+    return EnvironmentResponse(
+        id=row.id,
+        name=row.name,
+        image=row.image,
+        memory=row.memory,
+        cpus=row.cpus,
+        timeout_secs=row.timeout_secs,
+        network=row.network,
+        writable=row.writable,
+        network_allowlist=row.network_allowlist_json or [],
+        metadata={k: v for k, v in (row.metadata_json or {}).items() if v is not None},
+        created_at=row.created_at.isoformat(timespec="milliseconds") + "Z",
+        updated_at=row.updated_at.isoformat(timespec="milliseconds") + "Z",
+        archived_at=(
+            row.archived_at.isoformat(timespec="milliseconds") + "Z"
+            if row.archived_at
+            else None
+        ),
+    )
+
+
+async def create_environment(
+    db: AsyncSession,
+    *,
+    name: str,
+    image: str = "python:3.12-slim",
+    memory: str | None = None,
+    cpus: float | None = None,
+    timeout_secs: int = 300,
+    network: bool = False,
+    writable: bool = True,
+    network_allowlist: list[str] | None = None,
+    metadata: dict | None = None,
+) -> EnvironmentResponse:
+    env_id = gen_id("env")
+    now = datetime.utcnow()
+    row = EnvironmentRow(
+        id=env_id,
+        name=name,
+        image=image,
+        memory=memory,
+        cpus=cpus,
+        timeout_secs=timeout_secs,
+        network=network,
+        writable=writable,
+        network_allowlist_json=network_allowlist or [],
+        metadata_json=metadata or {},
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _env_row_to_response(row)
+
+
+async def get_environment(db: AsyncSession, env_id: str) -> EnvironmentResponse | None:
+    stmt = select(EnvironmentRow).where(EnvironmentRow.id == env_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    return _env_row_to_response(row)
+
+
+async def list_environments(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+    include_archived: bool = False,
+) -> list[EnvironmentResponse]:
+    stmt = select(EnvironmentRow)
+    if not include_archived:
+        stmt = stmt.where(EnvironmentRow.archived_at.is_(None))
+    stmt = stmt.order_by(EnvironmentRow.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return [_env_row_to_response(row) for row in result.scalars().all()]
+
+
+async def update_environment(
+    db: AsyncSession,
+    env_id: str,
+    **updates: Any,
+) -> EnvironmentResponse | None:
+    stmt = select(EnvironmentRow).where(EnvironmentRow.id == env_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+
+    field_map = {
+        "name": "name",
+        "image": "image",
+        "memory": "memory",
+        "cpus": "cpus",
+        "timeout_secs": "timeout_secs",
+        "network": "network",
+        "writable": "writable",
+        "network_allowlist": "network_allowlist_json",
+        "metadata": "metadata_json",
+    }
+    for key, value in updates.items():
+        if value is not None and key in field_map:
+            setattr(row, field_map[key], value)
+
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+    return _env_row_to_response(row)
+
+
+async def archive_environment(
+    db: AsyncSession, env_id: str
+) -> EnvironmentResponse | None:
+    stmt = select(EnvironmentRow).where(EnvironmentRow.id == env_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    row.archived_at = datetime.utcnow()
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+    return _env_row_to_response(row)

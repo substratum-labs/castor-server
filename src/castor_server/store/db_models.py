@@ -58,6 +58,28 @@ class SessionRow(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class EnvironmentRow(Base):
+    __tablename__ = "environments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    image: Mapped[str] = mapped_column(String(512), default="python:3.12-slim")
+    memory: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cpus: Mapped[float | None] = mapped_column(nullable=True)
+    timeout_secs: Mapped[int] = mapped_column(Integer, default=300)
+    network: Mapped[bool] = mapped_column(default=False)
+    writable: Mapped[bool] = mapped_column(default=True)
+    network_allowlist_json: Mapped[list] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class EventRow(Base):
     __tablename__ = "events"
 
