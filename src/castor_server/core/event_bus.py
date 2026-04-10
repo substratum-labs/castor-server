@@ -39,8 +39,16 @@ class EventBus:
             pass
 
     async def publish(self, event: dict[str, Any] | BaseModel) -> None:
-        """Publish an event to all subscribers."""
-        data = event.model_dump() if isinstance(event, BaseModel) else event
+        """Publish an event to all subscribers.
+
+        BaseModel events are dumped with ``exclude_none=True`` so optional
+        sub-fields (like ``SessionErrorDetail.retry_status``) are omitted
+        rather than serialized as ``null`` — matches the Anthropic wire format.
+        """
+        if isinstance(event, BaseModel):
+            data = event.model_dump(exclude_none=True)
+        else:
+            data = event
         logger.debug("publish session=%s type=%s", self.session_id, data.get("type"))
         for q in self._subscribers:
             await q.put(data)

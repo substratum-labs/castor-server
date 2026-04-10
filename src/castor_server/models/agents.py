@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
+from pydantic.functional_serializers import SerializerFunctionWrapHandler
 
 from .common import Metadata, ModelConfig
 
@@ -13,28 +14,42 @@ from .common import Metadata, ModelConfig
 # ---------------------------------------------------------------------------
 
 
+class _OmitNoneMixin(BaseModel):
+    """Pydantic models that should serialize with their None fields omitted.
+
+    Used for tool definition sub-objects where Anthropic's wire format omits
+    optional fields rather than emitting them as ``null``. Top-level nullable
+    fields like ``archived_at`` keep using the default behavior.
+    """
+
+    @model_serializer(mode="wrap")
+    def _strip_none(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        result = handler(self)
+        return {k: v for k, v in result.items() if v is not None}
+
+
 class PermissionPolicy(BaseModel):
     type: Literal["always_allow", "always_ask"] = "always_allow"
 
 
-class ToolConfig(BaseModel):
+class ToolConfig(_OmitNoneMixin):
     name: str
     enabled: bool = True
     permission_policy: PermissionPolicy | None = None
 
 
-class DefaultToolConfig(BaseModel):
+class DefaultToolConfig(_OmitNoneMixin):
     enabled: bool = True
     permission_policy: PermissionPolicy | None = None
 
 
-class AgentToolset(BaseModel):
+class AgentToolset(_OmitNoneMixin):
     type: Literal["agent_toolset_20260401"] = "agent_toolset_20260401"
     default_config: DefaultToolConfig | None = None
     configs: list[ToolConfig] | None = None
 
 
-class MCPToolset(BaseModel):
+class MCPToolset(_OmitNoneMixin):
     type: Literal["mcp_toolset"] = "mcp_toolset"
     mcp_server_name: str
     default_config: DefaultToolConfig | None = None

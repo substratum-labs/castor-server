@@ -25,7 +25,16 @@ from .db_models import AgentRow, EnvironmentRow, EventRow, SessionRow
 
 
 def _dump_list(items: list | None) -> list:
-    return [i.model_dump() if hasattr(i, "model_dump") else i for i in (items or [])]
+    """Dump pydantic models to dicts, omitting None sub-fields.
+
+    Used for tool definitions, MCP servers, skills, resources — none of these
+    have meaningful None sub-fields, and stripping them keeps the agent/session
+    response close to the Anthropic wire format.
+    """
+    return [
+        i.model_dump(exclude_none=True) if hasattr(i, "model_dump") else i
+        for i in (items or [])
+    ]
 
 
 def _model_to_config(model: str | ModelConfig) -> dict:

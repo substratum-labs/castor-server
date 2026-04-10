@@ -186,7 +186,7 @@ async def _emit(bus: EventBus, db: AsyncSession, session_id: str, event: Any) ->
         session_id=session_id,
         event_id=event.id,
         event_type=event.type,
-        data=event.model_dump(),
+        data=event.model_dump(exclude_none=True),
     )
 
 

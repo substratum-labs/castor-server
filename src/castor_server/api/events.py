@@ -47,7 +47,7 @@ async def send_events(
 
     for event in body.events:
         event_id = gen_id("evt")
-        event_data = event.model_dump()
+        event_data = event.model_dump(exclude_none=True)
         event_data["id"] = event_id
         event_data["processed_at"] = now_rfc3339()
 

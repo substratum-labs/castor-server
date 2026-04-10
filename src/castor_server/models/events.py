@@ -4,9 +4,24 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
+from pydantic.functional_serializers import SerializerFunctionWrapHandler
 
 from .common import TextBlock, gen_id, now_rfc3339
+
+
+class _OmitNoneMixin(BaseModel):
+    """Pydantic models that drop None fields when serialized.
+
+    Used for event sub-objects where Anthropic omits optional fields
+    rather than emitting them as ``null``.
+    """
+
+    @model_serializer(mode="wrap")
+    def _strip_none(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        result = handler(self)
+        return {k: v for k, v in result.items() if v is not None}
+
 
 # ---------------------------------------------------------------------------
 # User events (inbound)
@@ -136,10 +151,11 @@ class RetryStatus(BaseModel):
     type: Literal["retrying", "exhausted", "terminal"]
 
 
-class SessionErrorDetail(BaseModel):
+class SessionErrorDetail(_OmitNoneMixin):
     type: str
     message: str
     retry_status: RetryStatus | None = None
+    mcp_server_name: str | None = None
 
 
 class SessionError(BaseModel):

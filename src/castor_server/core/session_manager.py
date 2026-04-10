@@ -212,7 +212,7 @@ class SessionManager:
             session_id=session_id,
             event_id=idle_evt.id,
             event_type=idle_evt.type,
-            data=idle_evt.model_dump(),
+            data=idle_evt.model_dump(exclude_none=True),
         )
 
     # ------------------------------------------------------------------
@@ -254,6 +254,8 @@ class SessionManager:
             kernel_cp = await kernel.run(agent_fn, checkpoint=kernel_cp)
         except Exception as e:
             logger.exception("Kernel run error session=%s", session_id)
+            # Emit session.error here; status_idle is emitted by
+            # _handle_kernel_result based on the FAILED checkpoint status.
             err_evt = SessionError(
                 error=SessionErrorDetail(type="unknown_error", message=str(e))
             )
@@ -263,18 +265,7 @@ class SessionManager:
                 session_id=session_id,
                 event_id=err_evt.id,
                 event_type=err_evt.type,
-                data=err_evt.model_dump(),
-            )
-            # Emit idle on error
-            await repo.update_session_status(db, session_id, "idle")
-            idle_evt = SessionStatusIdle(stop_reason=StopReasonEndTurn())
-            await bus.publish(idle_evt)
-            await repo.store_event(
-                db,
-                session_id=session_id,
-                event_id=idle_evt.id,
-                event_type=idle_evt.type,
-                data=idle_evt.model_dump(),
+                data=err_evt.model_dump(exclude_none=True),
             )
             # Return a minimal checkpoint so save doesn't fail
             if kernel_cp is None:
@@ -309,7 +300,7 @@ class SessionManager:
                 session_id=session_id,
                 event_id=idle_evt.id,
                 event_type=idle_evt.type,
-                data=idle_evt.model_dump(),
+                data=idle_evt.model_dump(exclude_none=True),
             )
 
         elif kernel_cp.status == "SUSPENDED_FOR_HITL":
@@ -339,7 +330,7 @@ class SessionManager:
                 session_id=session_id,
                 event_id=idle_evt.id,
                 event_type=idle_evt.type,
-                data=idle_evt.model_dump(),
+                data=idle_evt.model_dump(exclude_none=True),
             )
 
         elif kernel_cp.status == "FAILED":
@@ -351,7 +342,7 @@ class SessionManager:
                 session_id=session_id,
                 event_id=idle_evt.id,
                 event_type=idle_evt.type,
-                data=idle_evt.model_dump(),
+                data=idle_evt.model_dump(exclude_none=True),
             )
 
     # ------------------------------------------------------------------
@@ -369,7 +360,7 @@ class SessionManager:
             session_id=session_id,
             event_id=running_evt.id,
             event_type=running_evt.type,
-            data=running_evt.model_dump(),
+            data=running_evt.model_dump(exclude_none=True),
         )
 
     # ------------------------------------------------------------------
