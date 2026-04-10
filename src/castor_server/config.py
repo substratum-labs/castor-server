@@ -50,5 +50,14 @@ class Settings(BaseSettings):
         description="Roche daemon gRPC port (auto-detect if None)",
     )
 
+    # Authentication
+    api_key: str | None = Field(
+        default=None,
+        description=(
+            "Global API key for authentication. If set, all requests must "
+            "include 'Authorization: Bearer <key>'. If unset, no auth (dev mode)."
+        ),
+    )
+
 
 settings = Settings()

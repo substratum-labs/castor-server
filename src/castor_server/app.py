@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from castor_server.config import settings
+from castor_server.core.auth import require_api_key
 from castor_server.store.database import init_db
 
 
@@ -60,13 +61,14 @@ def create_app() -> FastAPI:
     from castor_server.api.extensions import router as extensions_router
     from castor_server.api.sessions import router as sessions_router
 
-    app.include_router(agents_router)
-    app.include_router(environments_router)
-    app.include_router(sessions_router)
-    app.include_router(events_router)
-    app.include_router(extensions_router)
+    auth_deps = [Depends(require_api_key)]
+    app.include_router(agents_router, dependencies=auth_deps)
+    app.include_router(environments_router, dependencies=auth_deps)
+    app.include_router(sessions_router, dependencies=auth_deps)
+    app.include_router(events_router, dependencies=auth_deps)
+    app.include_router(extensions_router, dependencies=auth_deps)
 
-    # Health check
+    # Health check (no auth — used for monitoring/load balancers)
     @app.get("/health")
     async def health():
         return {"status": "ok"}
