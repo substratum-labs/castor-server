@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from castor_server.core.kernel_adapter import (
     _resolve_enabled_tools,
-    _resolve_hitl_tools,
     build_kernel_for_agent,
+    resolve_hitl_tools,
 )
 from castor_server.models.agents import (
     AgentResponse,
@@ -70,7 +70,7 @@ def test_resolve_default_disabled():
 
 def test_hitl_tools_include_destructive_by_default():
     agent = _make_agent()
-    hitl = _resolve_hitl_tools(agent)
+    hitl = resolve_hitl_tools(agent)
     assert "bash" in hitl
     assert "write" in hitl
     assert "edit" in hitl
@@ -89,7 +89,7 @@ def test_hitl_tools_always_ask_per_tool():
             )
         ]
     )
-    hitl = _resolve_hitl_tools(agent)
+    hitl = resolve_hitl_tools(agent)
     assert "read" in hitl
 
 
@@ -103,7 +103,7 @@ def test_hitl_tools_always_ask_default():
             )
         ]
     )
-    hitl = _resolve_hitl_tools(agent)
+    hitl = resolve_hitl_tools(agent)
     # All builtin tools should be HITL
     for name in BUILTIN_TOOL_NAMES:
         assert name in hitl

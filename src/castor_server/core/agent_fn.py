@@ -25,6 +25,7 @@ from castor.scheduler.proxy import SyscallProxy
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from castor_server.core.event_bus import EventBus
+from castor_server.core.kernel_adapter import resolve_hitl_tools
 from castor_server.models.agents import AgentResponse, ModelConfig
 from castor_server.models.common import TextBlock
 from castor_server.models.events import (
@@ -51,17 +52,45 @@ def build_agent_fn(
     bus: EventBus,
     db: AsyncSession,
     session_id: str,
+    latest_conversation: list[dict[str, Any]] | None = None,
 ) -> Callable[[SyscallProxy], Any]:
     """Build a kernel-compatible agent function as a closure.
 
     The returned coroutine runs inside ``kernel.run(agent_fn)`` and has
     access to session context via closure variables.
+
+    ``latest_conversation`` is an optional side-channel list that the
+    caller can pass in to observe the *current* conversation state after
+    the kernel returns (including suspended-for-HITL). The agent_fn
+    rebuilds it each turn (clears + extends) so it does NOT affect replay
+    determinism — only the immutable ``messages`` argument feeds the
+    kernel's syscall journal.
     """
     model_id = agent.model.id if isinstance(agent.model, ModelConfig) else agent.model
     tool_specs = _build_tools_for_llm(agent)
     custom_tool_names = _get_custom_tool_names(agent)
+    # Tools the kernel will suspend on for HITL approval. Used to set
+    # ``evaluated_permission`` on agent.tool_use events so SDK clients can
+    # tell which calls need a user.tool_confirmation.
+    hitl_tool_names = set(resolve_hitl_tools(agent))
+
+    def _sync_latest(conv: list[dict[str, Any]]) -> None:
+        """Mirror the in-progress conversation into the side-channel.
+
+        Called at every point where session_manager might need to inspect
+        the conversation while the agent is suspended (most importantly
+        after the assistant tool_call message is appended, since the next
+        proxy.syscall may raise SuspendInterrupt for HITL approval).
+        """
+        if latest_conversation is None:
+            return
+        latest_conversation.clear()
+        latest_conversation.extend(conv)
 
     async def agent_fn(proxy: SyscallProxy) -> str:
+        # Local copy — mutating ``messages`` would break Castor replay
+        # because the kernel re-runs agent_fn from index 0 on resume and
+        # checks syscall requests are byte-identical to the journal.
         conversation = list(messages)
 
         for _turn in range(MAX_TURNS):
@@ -105,6 +134,7 @@ def build_agent_fn(
                     await _emit(bus, db, session_id, msg_evt)
 
                 conversation.append({"role": "assistant", "content": text or ""})
+                _sync_latest(conversation)
                 return text or ""
 
             # -- Emit text blocks before tool calls --
@@ -118,6 +148,9 @@ def build_agent_fn(
 
             # -- Add assistant message with tool_calls to history --
             conversation.append(_build_assistant_message(content_blocks))
+            # Sync side channel BEFORE the (possibly suspending) syscall
+            # so session_manager can find the real tool_use ids if HITL.
+            _sync_latest(conversation)
 
             # -- Execute tool calls --
             for block in tool_use_blocks:
@@ -139,12 +172,17 @@ def build_agent_fn(
                         {"payload": {"tool_name": tool_name, "tool_id": tool_id}},
                     )
                 else:
-                    # Builtin tool via kernel syscall
+                    # Builtin tool via kernel syscall.
+                    # evaluated_permission tells SDK clients whether the
+                    # kernel will suspend for confirmation. HITL tools
+                    # (destructive or always_ask permission_policy) get
+                    # "ask"; everything else gets "allow".
                     if not proxy.is_replaying:
+                        permission = "ask" if tool_name in hitl_tool_names else "allow"
                         tool_evt = AgentToolUseEvent(
                             name=tool_name,
                             input=tool_input,
-                            evaluated_permission="allow",
+                            evaluated_permission=permission,
                         )
                         tool_evt.id = tool_id
                         await _emit(bus, db, session_id, tool_evt)
@@ -166,6 +204,7 @@ def build_agent_fn(
                         "content": str(result),
                     }
                 )
+                _sync_latest(conversation)
 
         return "max_turns_reached"
 

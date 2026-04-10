@@ -31,7 +31,7 @@ def build_kernel_for_agent(agent: AgentResponse) -> Castor:
     - The LLM callable for inference syscalls
     """
     enabled_tools = _resolve_enabled_tools(agent)
-    hitl_tool_names = _resolve_hitl_tools(agent)
+    hitl_tool_names = resolve_hitl_tools(agent)
 
     model_id = agent.model.id if isinstance(agent.model, ModelConfig) else agent.model
 
@@ -80,7 +80,7 @@ def _resolve_enabled_tools(agent: AgentResponse) -> list[Callable]:
     return enabled
 
 
-def _resolve_hitl_tools(agent: AgentResponse) -> list[str]:
+def resolve_hitl_tools(agent: AgentResponse) -> list[str]:
     """Determine which tools should trigger HITL suspension.
 
     A tool triggers HITL if:

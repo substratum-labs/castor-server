@@ -22,7 +22,7 @@ from anthropic import Anthropic
 
 from castor_server.client import stream_events
 
-BASE_URL = "http://127.0.0.1:9093"
+BASE_URL = "http://127.0.0.1:9097"
 # Cheap, fast, supports tool use. Routed to openrouter via the explicit prefix.
 TOOL_MODEL = "openrouter/anthropic/claude-3.5-haiku"
 
@@ -207,10 +207,42 @@ def main() -> int:
     else:
         failures.append("no final agent.message event")
 
-    # Verify exactly one terminal event
-    idle_count = sum(1 for t in types if t == "session.status_idle")
-    if idle_count != 1:
-        failures.append(f"expected exactly 1 session.status_idle, got {idle_count}")
+    # Verify exactly one TERMINAL idle (end_turn). HITL pauses also emit
+    # idle events with stop_reason=requires_action — those don't count.
+    terminal_idles = [
+        e
+        for e in received
+        if e.get("type") == "session.status_idle"
+        and (e.get("stop_reason") or {}).get("type") == "end_turn"
+    ]
+    if len(terminal_idles) != 1:
+        failures.append(
+            f"expected exactly 1 terminal idle (end_turn), got {len(terminal_idles)}"
+        )
+
+    # Verify the requires_action idle uses real tool_use ids (not synthetic)
+    pause_idles = [
+        e
+        for e in received
+        if e.get("type") == "session.status_idle"
+        and (e.get("stop_reason") or {}).get("type") == "requires_action"
+    ]
+    for pause in pause_idles:
+        ids = pause["stop_reason"].get("event_ids", [])
+        for ev_id in ids:
+            if ev_id.startswith("hitl_"):
+                failures.append(
+                    f"requires_action used synthetic id {ev_id!r} "
+                    "instead of real tool_use id"
+                )
+
+    # Verify agent.tool_use uses evaluated_permission='ask' for HITL tools
+    for tu in tool_uses:
+        if tu.get("evaluated_permission") != "ask":
+            failures.append(
+                f"agent.tool_use for HITL tool should be 'ask', "
+                f"got {tu.get('evaluated_permission')!r}"
+            )
 
     # ── Report ──
     print("\n" + "=" * 60)

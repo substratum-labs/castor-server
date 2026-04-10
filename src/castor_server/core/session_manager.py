@@ -47,6 +47,11 @@ class SessionManager:
     def __init__(self) -> None:
         self._buses: dict[str, EventBus] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # In-memory snapshot of the most recent agent_fn conversation per
+        # session. Used to recover the real ``agent.tool_use`` id when the
+        # kernel suspends for HITL. NOT persisted — the kernel checkpoint
+        # is the authoritative resume state.
+        self._latest_conversation_by_session: dict[str, list[dict[str, Any]]] = {}
         self._background_tasks: set[asyncio.Task] = set()
 
     def get_bus(self, session_id: str) -> EventBus:
@@ -107,7 +112,7 @@ class SessionManager:
             )
 
             # Handle result
-            await self._handle_kernel_result(db, session_id, bus, kernel_cp)
+            await self._handle_kernel_result(db, session_id, bus, kernel_cp, messages)
             await self._save_checkpoint(db, session_id, kernel_cp, messages)
 
     async def handle_tool_confirmation(
@@ -133,6 +138,31 @@ class SessionManager:
 
             if kernel_cp is None:
                 return
+
+            # Verify the incoming tool_use_id matches what's actually
+            # pending. The kernel only suspends one syscall at a time, so
+            # there's exactly one pending tool — we use the latest
+            # in-memory conversation snapshot to recover its real id (the
+            # LLM's tool_use id) and reject mismatches. Synthetic
+            # 'hitl_<name>' fallback ids are also accepted for backwards
+            # compatibility with older clients.
+            expected_id = None
+            if kernel_cp.pending_hitl:
+                pending_tool_name = kernel_cp.pending_hitl.get("tool_name", "")
+                snapshot = self._latest_conversation_by_session.get(session_id)
+                expected_id = self._find_pending_tool_use_id(
+                    snapshot, pending_tool_name
+                )
+                synthetic = f"hitl_{pending_tool_name}"
+                if tool_use_id != expected_id and tool_use_id != synthetic:
+                    logger.warning(
+                        "tool_confirmation id mismatch: got %s expected %s "
+                        "(session=%s)",
+                        tool_use_id,
+                        expected_id,
+                        session_id,
+                    )
+                    return
 
             kernel = build_kernel_for_agent(session.agent)
 
@@ -160,7 +190,7 @@ class SessionManager:
             kernel_cp = await self._run_kernel(
                 db, session_id, session.agent, bus, kernel_cp, messages
             )
-            await self._handle_kernel_result(db, session_id, bus, kernel_cp)
+            await self._handle_kernel_result(db, session_id, bus, kernel_cp, messages)
             await self._save_checkpoint(db, session_id, kernel_cp, messages)
 
     async def handle_custom_tool_result(
@@ -212,7 +242,7 @@ class SessionManager:
             kernel_cp = await self._run_kernel(
                 db, session_id, session.agent, bus, kernel_cp, messages
             )
-            await self._handle_kernel_result(db, session_id, bus, kernel_cp)
+            await self._handle_kernel_result(db, session_id, bus, kernel_cp, messages)
             await self._save_checkpoint(db, session_id, kernel_cp, messages)
 
     async def handle_interrupt(self, db: AsyncSession, session_id: str) -> None:
@@ -242,10 +272,24 @@ class SessionManager:
         kernel_cp: AgentCheckpoint | None,
         messages: list[dict[str, Any]],
     ) -> AgentCheckpoint:
-        """Build kernel + agent function, execute via kernel.run()."""
+        """Build kernel + agent function, execute via kernel.run().
+
+        Mutates ``messages`` in place with the agent's latest conversation
+        snapshot AFTER the kernel run completes (or suspends). This is how
+        we recover the assistant's tool_calls when the kernel pauses for
+        HITL — the snapshot is built via a side-channel list that the
+        agent_fn updates without breaking replay determinism.
+        """
         from castor_server.tools.builtin import clear_sandbox, set_sandbox
 
         kernel = build_kernel_for_agent(agent)
+
+        # Side-channel for the latest conversation state. agent_fn writes
+        # into this list at every checkpoint (assistant tool_call, tool
+        # result, terminal message); we mirror it back into ``messages``
+        # after the kernel returns so _handle_kernel_result and
+        # _save_checkpoint see the right state.
+        latest_conversation: list[dict[str, Any]] = []
 
         agent_fn = build_agent_fn(
             agent=agent,
@@ -253,6 +297,7 @@ class SessionManager:
             bus=bus,
             db=db,
             session_id=session_id,
+            latest_conversation=latest_conversation,
         )
 
         # Set up sandbox context if session has an environment
@@ -294,6 +339,13 @@ class SessionManager:
         finally:
             if sandbox_token is not None:
                 clear_sandbox(sandbox_token)
+            # NOTE: do NOT mirror latest_conversation back into messages.
+            # The kernel's replay-on-resume requires ``messages`` to be the
+            # exact original input each time agent_fn is called. The
+            # latest_conversation snapshot is for the caller to peek at
+            # the in-progress state (e.g. to find tool_use ids for HITL),
+            # not for persistence.
+            self._latest_conversation_by_session[session_id] = list(latest_conversation)
 
         return kernel_cp
 
@@ -303,8 +355,14 @@ class SessionManager:
         session_id: str,
         bus: EventBus,
         kernel_cp: AgentCheckpoint,
+        messages: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Emit appropriate session events based on kernel checkpoint status."""
+        """Emit appropriate session events based on kernel checkpoint status.
+
+        ``messages`` is the conversation history (used to recover the real
+        ``agent.tool_use`` id when the kernel suspends for HITL — see
+        ``_find_pending_tool_use_id``).
+        """
         if kernel_cp.status == "COMPLETED":
             await repo.update_session_status(db, session_id, "idle")
             idle_evt = SessionStatusIdle(stop_reason=StopReasonEndTurn())
@@ -319,7 +377,7 @@ class SessionManager:
 
         elif kernel_cp.status == "SUSPENDED_FOR_HITL":
             # Determine blocking event IDs from pending_hitl
-            blocking_ids = []
+            blocking_ids: list[str] = []
             if kernel_cp.pending_hitl:
                 tool_name = kernel_cp.pending_hitl.get("tool_name", "")
                 if tool_name == "external_input":
@@ -331,8 +389,24 @@ class SessionManager:
                     if tool_id:
                         blocking_ids.append(tool_id)
                 else:
-                    # Builtin tool HITL — use a generated event ID
-                    blocking_ids.append(f"hitl_{tool_name}")
+                    # Builtin tool HITL — recover the real tool_use id from
+                    # the latest in-progress conversation snapshot (built
+                    # by agent_fn during the run). The SDK uses this id to
+                    # send back a user.tool_confirmation.
+                    snapshot = self._latest_conversation_by_session.get(session_id)
+                    real_id = self._find_pending_tool_use_id(snapshot, tool_name)
+                    if real_id:
+                        blocking_ids.append(real_id)
+                    else:
+                        # Fallback to a synthetic id if we can't find the
+                        # original — better than emitting empty event_ids.
+                        logger.warning(
+                            "could not find tool_use id for pending HITL "
+                            "tool=%s session=%s",
+                            tool_name,
+                            session_id,
+                        )
+                        blocking_ids.append(f"hitl_{tool_name}")
 
             await repo.update_session_status(db, session_id, "idle")
             idle_evt = SessionStatusIdle(
@@ -358,6 +432,39 @@ class SessionManager:
                 event_type=idle_evt.type,
                 data=idle_evt.model_dump(exclude_none=True),
             )
+
+    # ------------------------------------------------------------------
+    # Internal — HITL helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_pending_tool_use_id(
+        messages: list[dict[str, Any]] | None,
+        tool_name: str,
+    ) -> str | None:
+        """Find the LLM-assigned tool_use id for the most recent call to
+        ``tool_name``.
+
+        The conversation history (``messages``) carries the assistant's
+        ``tool_calls`` from each LLM turn. When the kernel suspends for
+        HITL, the pending syscall corresponds to one of the tool_calls in
+        the most recent assistant message. We match by tool name.
+
+        Returns ``None`` if no matching tool_call can be found.
+        """
+        if not messages:
+            return None
+        for msg in reversed(messages):
+            if msg.get("role") != "assistant":
+                continue
+            tool_calls = msg.get("tool_calls") or []
+            for tc in tool_calls:
+                func = tc.get("function") or {}
+                if func.get("name") == tool_name:
+                    return tc.get("id")
+            # Stop at the first assistant message — older ones are stale.
+            return None
+        return None
 
     # ------------------------------------------------------------------
     # Internal — status events
