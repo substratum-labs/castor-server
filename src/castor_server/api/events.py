@@ -21,6 +21,7 @@ from castor_server.models.events import (
     UserMessage,
     UserToolConfirmation,
 )
+from castor_server.store import database as db_module
 from castor_server.store.database import get_session
 from castor_server.store.repository import (
     get_session as get_session_by_id,
@@ -29,6 +30,28 @@ from castor_server.store.repository import (
     list_events,
     store_event,
 )
+
+
+async def _with_fresh_session(handler_name: str, *args, **kwargs) -> None:
+    """Run a session_manager handler with a fresh DB session.
+
+    Background tasks must NOT reuse the request's DB session because the
+    request's session closes when the response returns. This wrapper opens
+    its own session via the module-level factory (which tests can override
+    via ``database.set_session_factory``).
+    """
+    # Look up the factory dynamically — tests override the module attr
+    async with db_module.async_session() as db:
+        handler = getattr(session_manager, handler_name)
+        try:
+            await handler(db, *args, **kwargs)
+        except Exception:
+            import logging
+
+            logging.getLogger("castor_server.events").exception(
+                "Background handler %s failed", handler_name
+            )
+
 
 router = APIRouter(prefix="/v1/sessions/{session_id}", tags=["events"])
 
@@ -61,19 +84,25 @@ async def send_events(
         )
         sent.append(event_data)
 
-        # Dispatch to session manager (fire and forget for async processing)
+        # Dispatch to session manager via fresh DB session (background tasks
+        # cannot reuse the request session — it closes when the response
+        # returns, leaving the task with a dead connection).
         if isinstance(event, UserMessage):
-            asyncio.create_task(
-                session_manager.handle_user_message(
-                    db, session_id, [c.model_dump() for c in event.content]
+            session_manager.dispatch(
+                _with_fresh_session(
+                    "handle_user_message",
+                    session_id,
+                    [c.model_dump() for c in event.content],
                 )
             )
         elif isinstance(event, UserInterrupt):
-            asyncio.create_task(session_manager.handle_interrupt(db, session_id))
+            session_manager.dispatch(
+                _with_fresh_session("handle_interrupt", session_id)
+            )
         elif isinstance(event, UserToolConfirmation):
-            asyncio.create_task(
-                session_manager.handle_tool_confirmation(
-                    db,
+            session_manager.dispatch(
+                _with_fresh_session(
+                    "handle_tool_confirmation",
                     session_id,
                     event.tool_use_id,
                     event.result,
@@ -82,9 +111,9 @@ async def send_events(
                 )
             )
         elif isinstance(event, UserCustomToolResult):
-            asyncio.create_task(
-                session_manager.handle_custom_tool_result(
-                    db,
+            session_manager.dispatch(
+                _with_fresh_session(
+                    "handle_custom_tool_result",
                     session_id,
                     event.custom_tool_use_id,
                     [c.model_dump() for c in event.content] if event.content else None,

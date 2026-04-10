@@ -47,6 +47,7 @@ class SessionManager:
     def __init__(self) -> None:
         self._buses: dict[str, EventBus] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._background_tasks: set[asyncio.Task] = set()
 
     def get_bus(self, session_id: str) -> EventBus:
         if session_id not in self._buses:
@@ -57,6 +58,19 @@ class SessionManager:
         if session_id not in self._locks:
             self._locks[session_id] = asyncio.Lock()
         return self._locks[session_id]
+
+    def dispatch(self, coro) -> asyncio.Task:
+        """Spawn a fire-and-forget task and track it for drain on shutdown."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    async def drain(self) -> None:
+        """Wait for all in-flight background tasks to complete."""
+        if not self._background_tasks:
+            return
+        await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
     # ------------------------------------------------------------------
     # Event handlers (called from api/events.py)

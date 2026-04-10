@@ -24,6 +24,12 @@ async def auth_client(db_engine, monkeypatch) -> AsyncGenerator[AsyncClient, Non
     session_factory = async_sessionmaker(
         db_engine, class_=AsyncSession, expire_on_commit=False
     )
+
+    from castor_server.store import database as db_module
+
+    original_factory = db_module.async_session
+    db_module.set_session_factory(session_factory)
+
     app = create_app()
 
     async def override_get_session():
@@ -34,6 +40,8 @@ async def auth_client(db_engine, monkeypatch) -> AsyncGenerator[AsyncClient, Non
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+    db_module.set_session_factory(original_factory)
 
 
 @pytest.mark.asyncio
