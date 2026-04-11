@@ -261,7 +261,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
-    { name = "asyncpg" },
     { name = "castor-kernel" },
     { name = "click" },
     { name = "fastapi" },
@@ -270,10 +269,17 @@ dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "roche-sandbox" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sse-starlette" },
     { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+postgres = [
+    { name = "asyncpg" },
+]
+sandbox = [
+    { name = "roche-sandbox" },
 ]
 
 [package.dev-dependencies]
@@ -288,7 +294,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20.0" },
-    { name = "asyncpg", specifier = ">=0.31.0" },
+    { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.31.0" },
     { name = "castor-kernel", specifier = ">=0.5.1" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
@@ -297,11 +303,12 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.27.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
-    { name = "roche-sandbox", editable = "../roche/sdk/python" },
+    { name = "roche-sandbox", marker = "extra == 'sandbox'", specifier = ">=0.6.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
     { name = "sse-starlette", specifier = ">=2.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
+provides-extras = ["sandbox", "postgres"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2004,22 +2011,15 @@ wheels = [
 [[package]]
 name = "roche-sandbox"
 version = "0.6.0"
-source = { editable = "../roche/sdk/python" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "castor", marker = "extra == 'castor'", specifier = ">=0.4.0" },
-    { name = "grpcio", specifier = ">=1.60.0" },
-    { name = "grpcio-tools", marker = "extra == 'dev'", specifier = ">=1.60.0" },
-    { name = "protobuf", specifier = ">=4.25.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/e7/c7/a12fed4e4a4bfaa91d730ca93cb2e9e98c684970bc46c328d7d715befb05/roche_sandbox-0.6.0.tar.gz", hash = "sha256:6fde3aea8b82fe2eba6722a5d550f1095917a72dd6ecd2d9cbf1b9f848e74e18", size = 41580, upload-time = "2026-04-02T03:17:51.718Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/3a/0b34e943830a2c59f6c8391f04135114a88a87d2622bc09c8c8fcd66f8ee/roche_sandbox-0.6.0-py3-none-any.whl", hash = "sha256:f8843f334263625518f217221143895db74ccbd6fc0037371fbedd227935729a", size = 43946, upload-time = "2026-04-02T03:17:50.547Z" },
 ]
-provides-extras = ["castor", "dev"]
 
 [[package]]
 name = "rpds-py"

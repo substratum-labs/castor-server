@@ -1,33 +1,56 @@
-"""Sandbox manager: per-session Roche sandbox lifecycle."""
+"""Sandbox manager: per-session Roche sandbox lifecycle.
+
+Roche is an optional dependency — install with ``pip install castor-server[sandbox]``
+to enable isolated tool execution. Without it, sessions created with an
+environment_id will raise a clear error at sandbox-creation time, but the
+rest of the server (CRUD, events, agents without environments) works fine.
+"""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
-
-from roche_sandbox.client import AsyncRoche
-from roche_sandbox.sandbox import AsyncSandbox
+from typing import TYPE_CHECKING, Any
 
 from castor_server.config import settings
 from castor_server.models.environments import EnvironmentResponse
 
+if TYPE_CHECKING:
+    from roche_sandbox.sandbox import AsyncSandbox
+
 logger = logging.getLogger("castor_server.sandbox_manager")
+
+
+def _import_roche():
+    """Lazy import of roche_sandbox so the package stays optional."""
+    try:
+        from roche_sandbox.client import AsyncRoche
+        from roche_sandbox.sandbox import AsyncSandbox
+    except ImportError as e:
+        raise RuntimeError(
+            "Roche sandbox is not installed. Install the sandbox extra to "
+            "enable isolated tool execution:\n"
+            "    pip install 'castor-server[sandbox]'\n"
+            "Or omit environment_id when creating sessions to run tools on "
+            "the host (development mode)."
+        ) from e
+    return AsyncRoche, AsyncSandbox
 
 
 class SandboxManager:
     """Manages per-session Roche sandboxes."""
 
     def __init__(self) -> None:
-        self._sandboxes: dict[str, AsyncSandbox] = {}
-        self._client: AsyncRoche | None = None
+        self._sandboxes: dict[str, Any] = {}
+        self._client: Any | None = None
 
-    def _get_client(self) -> AsyncRoche:
+    def _get_client(self):
         if self._client is None:
+            async_roche_cls, _ = _import_roche()
             kwargs: dict[str, Any] = {"provider": settings.roche_provider}
             if settings.roche_daemon_port is not None:
                 kwargs["daemon_port"] = settings.roche_daemon_port
-            self._client = AsyncRoche(**kwargs)
+            self._client = async_roche_cls(**kwargs)
         return self._client
 
     async def get_or_create(

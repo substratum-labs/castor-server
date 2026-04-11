@@ -8,14 +8,28 @@ local LLMs via LiteLLM). Wire-compatible with the official `anthropic` SDK,
 plus Castor extensions for budget control, speculative review, time-travel
 fork, and HITL modify.
 
+## Install
+
+```bash
+# From source (recommended until we publish to PyPI):
+git clone https://github.com/substratum-labs/castor-server
+cd castor-server
+uv sync                             # or: pip install -e .
+
+# Optional: enable Roche sandbox isolation for tool execution
+uv sync --extra sandbox              # or: pip install -e '.[sandbox]'
+
+# Optional: PostgreSQL backend (default is SQLite)
+uv sync --extra postgres             # or: pip install -e '.[postgres]'
+```
+
 ## 30-second offline demo
 
 No API key required — uses the built-in `mock` model.
 
 ```bash
 # Terminal 1
-uv tool install castor-server   # or: pip install castor-server
-castor-server run               # binds 0.0.0.0:8080
+uv run castor-server run        # binds 0.0.0.0:8080
 ```
 
 ```bash
