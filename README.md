@@ -1,4 +1,4 @@
-# castor-server
+# Castor Server
 
 **Self-hosted, model-agnostic Anthropic Managed Agents API.**
 
