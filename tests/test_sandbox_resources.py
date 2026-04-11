@@ -194,12 +194,30 @@ async def test_mount_skips_unknown_resource_type(caplog):
 
 
 @pytest.mark.asyncio
-async def test_file_resource_logs_not_supported(caplog):
-    sm = SandboxManager()
+async def test_file_resource_mounts_via_copy_to(tmp_path, monkeypatch):
+    """A file resource looks up the metadata, then copy_to's the blob."""
+    from unittest.mock import patch as mpatch
 
+    from castor_server.models.files import FileMetadata
+
+    # Create a real blob on disk inside tmp_path
+    monkeypatch.setattr("castor_server.config.settings.files_dir", str(tmp_path))
+    blob = tmp_path / "file_abc"
+    blob.write_bytes(b"hello world")
+
+    fake_meta = FileMetadata(
+        id="file_abc",
+        filename="report.pdf",
+        mime_type="application/pdf",
+        size_bytes=11,
+        created_at="2026-04-10T00:00:00.000Z",
+    )
+
+    sm = SandboxManager()
     fake_sandbox = MagicMock()
-    fake_sandbox.id = "sbx_6"
+    fake_sandbox.id = "sbx_file"
     fake_sandbox.exec = AsyncMock(return_value=_fake_exec_result())
+    fake_sandbox.copy_to = AsyncMock()
 
     fake_client = MagicMock()
     fake_client.create = AsyncMock(return_value=fake_sandbox)
@@ -207,10 +225,82 @@ async def test_file_resource_logs_not_supported(caplog):
 
     resources = [{"type": "file", "file_id": "file_abc"}]
 
-    with caplog.at_level("WARNING"):
-        await sm.get_or_create("session_6", _fake_env(), resources=resources)
+    # Patch the repository lookup so we don't need a real DB
+    with mpatch(
+        "castor_server.store.repository.get_file",
+        new=AsyncMock(return_value=fake_meta),
+    ):
+        await sm.get_or_create("session_file", _fake_env(), resources=resources)
 
-    assert any("file resource not yet supported" in r.message for r in caplog.records)
+    fake_sandbox.copy_to.assert_awaited_once()
+    args = fake_sandbox.copy_to.await_args.args
+    # Host path should be tmp_path/file_abc
+    assert args[0] == str(blob)
+    # Sandbox path defaults to /workspace/<filename>
+    assert args[1] == "/workspace/report.pdf"
+
+
+@pytest.mark.asyncio
+async def test_file_resource_missing_file_id_warns(caplog):
+    sm = SandboxManager()
+    fake_sandbox = MagicMock()
+    fake_sandbox.id = "sbx_no_id"
+    fake_sandbox.exec = AsyncMock(return_value=_fake_exec_result())
+    fake_sandbox.copy_to = AsyncMock()
+
+    fake_client = MagicMock()
+    fake_client.create = AsyncMock(return_value=fake_sandbox)
+    sm._client = fake_client
+
+    resources = [{"type": "file"}]  # missing file_id
+
+    with caplog.at_level("WARNING"):
+        await sm.get_or_create("session_no_id", _fake_env(), resources=resources)
+
+    assert any("missing file_id" in r.message for r in caplog.records)
+    fake_sandbox.copy_to.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_resource_blob_missing_warns(tmp_path, monkeypatch, caplog):
+    from unittest.mock import patch as mpatch
+
+    from castor_server.models.files import FileMetadata
+
+    monkeypatch.setattr("castor_server.config.settings.files_dir", str(tmp_path))
+    # Don't create the blob — only the metadata
+
+    fake_meta = FileMetadata(
+        id="file_missing_blob",
+        filename="x.txt",
+        mime_type="text/plain",
+        size_bytes=1,
+        created_at="2026-04-10T00:00:00.000Z",
+    )
+
+    sm = SandboxManager()
+    fake_sandbox = MagicMock()
+    fake_sandbox.id = "sbx_no_blob"
+    fake_sandbox.exec = AsyncMock(return_value=_fake_exec_result())
+    fake_sandbox.copy_to = AsyncMock()
+
+    fake_client = MagicMock()
+    fake_client.create = AsyncMock(return_value=fake_sandbox)
+    sm._client = fake_client
+
+    resources = [{"type": "file", "file_id": "file_missing_blob"}]
+
+    with (
+        mpatch(
+            "castor_server.store.repository.get_file",
+            new=AsyncMock(return_value=fake_meta),
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        await sm.get_or_create("session_no_blob", _fake_env(), resources=resources)
+
+    assert any("blob missing on disk" in r.message for r in caplog.records)
+    fake_sandbox.copy_to.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -11,13 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from castor_server.models.agents import AgentResponse
 from castor_server.models.common import ModelConfig, gen_id
 from castor_server.models.environments import EnvironmentResponse
+from castor_server.models.files import FileMetadata
 from castor_server.models.sessions import (
     SessionResponse,
     SessionStats,
     SessionUsage,
 )
 
-from .db_models import AgentRow, EnvironmentRow, EventRow, SessionRow
+from .db_models import AgentRow, EnvironmentRow, EventRow, FileRow, SessionRow
 
 # ---------------------------------------------------------------------------
 # Agents
@@ -590,3 +591,66 @@ async def archive_environment(
     await db.commit()
     await db.refresh(row)
     return _env_row_to_response(row)
+
+
+# ---------------------------------------------------------------------------
+# Files
+# ---------------------------------------------------------------------------
+
+
+def _file_row_to_response(row: FileRow) -> FileMetadata:
+    return FileMetadata(
+        id=row.id,
+        filename=row.filename,
+        mime_type=row.mime_type,
+        size_bytes=row.size_bytes,
+        scope=row.scope,
+        created_at=row.created_at.isoformat(timespec="milliseconds") + "Z",
+    )
+
+
+async def create_file(
+    db: AsyncSession,
+    *,
+    file_id: str,
+    filename: str,
+    mime_type: str,
+    size_bytes: int,
+    scope: str | None = None,
+) -> FileMetadata:
+    row = FileRow(
+        id=file_id,
+        filename=filename,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+        scope=scope,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _file_row_to_response(row)
+
+
+async def get_file(db: AsyncSession, file_id: str) -> FileMetadata | None:
+    stmt = select(FileRow).where(FileRow.id == file_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    return _file_row_to_response(row) if row else None
+
+
+async def list_files(db: AsyncSession, *, limit: int = 100) -> list[FileMetadata]:
+    stmt = select(FileRow).order_by(FileRow.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return [_file_row_to_response(r) for r in result.scalars().all()]
+
+
+async def delete_file(db: AsyncSession, file_id: str) -> bool:
+    stmt = select(FileRow).where(FileRow.id == file_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.commit()
+    return True

@@ -66,5 +66,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Files API storage
+    files_dir: str = Field(
+        default="./castor_files",
+        description="Directory where uploaded file blobs are stored.",
+    )
+    files_max_bytes: int = Field(
+        default=100 * 1024 * 1024,  # 100 MB
+        description="Maximum allowed upload size in bytes.",
+    )
+
 
 settings = Settings()

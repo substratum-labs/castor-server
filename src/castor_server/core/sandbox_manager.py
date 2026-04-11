@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from roche_sandbox.client import AsyncRoche
@@ -76,27 +77,89 @@ class SandboxManager:
     ) -> None:
         """Materialize session resources inside the sandbox.
 
-        Currently supports:
+        Supports:
           - ``github_repository``: ``git clone`` the repo into ``mount_path``
             (defaults to ``/workspace/<repo-name>``). Optional
             ``authorization_token`` is injected as the URL user, and
             ``checkout`` (branch/tag/sha) is checked out after clone.
-          - ``file``: not yet supported — needs a Files API. Logged as a
-            warning so users see why their file isn't there.
+          - ``file``: ``copy_to`` the uploaded file blob from the host
+            into ``mount_path`` (defaults to ``/workspace/<filename>``).
+            Looks up the metadata and on-disk path via the Files API
+            store.
         """
         for resource in resources:
             rtype = resource.get("type")
             if rtype == "github_repository":
                 await self._mount_github_repository(sandbox, session_id, resource)
             elif rtype == "file":
-                logger.warning(
-                    "file resource not yet supported (needs Files API): "
-                    "session=%s file_id=%s",
-                    session_id,
-                    resource.get("file_id"),
-                )
+                await self._mount_file_resource(sandbox, session_id, resource)
             else:
                 logger.warning("unknown resource type=%r session=%s", rtype, session_id)
+
+    async def _mount_file_resource(
+        self,
+        sandbox: AsyncSandbox,
+        session_id: str,
+        resource: dict[str, Any],
+    ) -> None:
+        """Copy an uploaded file from the host blob store into the sandbox.
+
+        Looks up the file metadata via a fresh database session because
+        sandbox_manager doesn't have access to the request session.
+        """
+        from castor_server.store.database import async_session
+        from castor_server.store.repository import get_file as repo_get_file
+
+        file_id = resource.get("file_id")
+        if not file_id:
+            logger.warning("file resource missing file_id session=%s", session_id)
+            return
+
+        async with async_session() as db:
+            meta = await repo_get_file(db, file_id)
+
+        if meta is None:
+            logger.warning(
+                "file resource not found in store session=%s file_id=%s",
+                session_id,
+                file_id,
+            )
+            return
+
+        host_path = str(Path(settings.files_dir) / file_id)
+        if not Path(host_path).exists():
+            logger.warning(
+                "file blob missing on disk session=%s file_id=%s path=%s",
+                session_id,
+                file_id,
+                host_path,
+            )
+            return
+
+        mount_path = resource.get("mount_path") or f"/workspace/{meta.filename}"
+
+        # Make sure the parent directory exists.
+        parent = "/".join(mount_path.rstrip("/").split("/")[:-1]) or "/"
+        await sandbox.exec(["mkdir", "-p", parent])
+
+        try:
+            await sandbox.copy_to(host_path, mount_path)
+        except Exception:
+            logger.exception(
+                "file copy_to failed session=%s file_id=%s mount_path=%s",
+                session_id,
+                file_id,
+                mount_path,
+            )
+            return
+
+        logger.info(
+            "file_resource_mounted session=%s file_id=%s filename=%s path=%s",
+            session_id,
+            file_id,
+            meta.filename,
+            mount_path,
+        )
 
     async def _mount_github_repository(
         self,
