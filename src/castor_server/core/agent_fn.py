@@ -61,6 +61,7 @@ def build_agent_fn(
     session_id: str,
     latest_conversation: list[dict[str, Any]] | None = None,
     mcp_tools_by_server: dict[str, list[McpToolSpec]] | None = None,
+    skill_contents: list[str] | None = None,
 ) -> Callable[[SyscallProxy], Any]:
     """Build a kernel-compatible agent function as a closure.
 
@@ -79,6 +80,10 @@ def build_agent_fn(
     discovered from the agent's configured MCP servers. These are merged
     into the tool list sent to the LLM, and tool calls that match an
     MCP tool name are routed through the kernel's ``mcp_call`` syscall.
+
+    ``skill_contents`` is a list of SKILL.md text contents resolved from
+    the agent's skill references. These are appended to the system prompt
+    so the LLM has access to the skill instructions.
     """
     mcp_tools_by_server = mcp_tools_by_server or {}
     model_id = agent.model.id if isinstance(agent.model, ModelConfig) else agent.model
@@ -123,7 +128,9 @@ def build_agent_fn(
 
         for _turn in range(MAX_TURNS):
             # -- LLM call --
-            llm_messages = _build_llm_messages(agent, conversation)
+            llm_messages = _build_llm_messages(
+                agent, conversation, skill_contents=skill_contents
+            )
 
             span_start = SpanModelRequestStart()
             if not proxy.is_replaying:
@@ -329,12 +336,32 @@ def _build_assistant_message(
 
 
 def _build_llm_messages(
-    agent: AgentResponse, conversation: list[dict[str, Any]]
+    agent: AgentResponse,
+    conversation: list[dict[str, Any]],
+    *,
+    skill_contents: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build the messages array for an LLM call."""
+    """Build the messages array for an LLM call.
+
+    The system prompt is constructed by joining:
+    1. ``agent.system`` (the user-provided system prompt)
+    2. Each resolved SKILL.md content (from ``skill_contents``)
+
+    Skill content is appended after the system prompt so the LLM sees
+    the skill instructions as part of its operating context.
+    """
     messages: list[dict[str, Any]] = []
+
+    # Build composite system prompt: agent.system + skill contents
+    parts: list[str] = []
     if agent.system:
-        messages.append({"role": "system", "content": agent.system})
+        parts.append(agent.system)
+    if skill_contents:
+        for content in skill_contents:
+            parts.append(content)
+    if parts:
+        messages.append({"role": "system", "content": "\n\n".join(parts)})
+
     messages.extend(conversation)
     return messages
 

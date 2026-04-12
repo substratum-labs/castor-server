@@ -299,6 +299,10 @@ class SessionManager:
         # Cached per session to avoid re-discovering on every turn.
         mcp_tools_by_server = await self._get_mcp_tools(session_id, agent)
 
+        # Resolve skill content — read SKILL.md files from disk for all
+        # skills referenced by the agent. Cached per session.
+        skill_contents = await self._resolve_skill_contents(db, agent)
+
         agent_fn = build_agent_fn(
             agent=agent,
             messages=messages,
@@ -307,6 +311,7 @@ class SessionManager:
             session_id=session_id,
             latest_conversation=latest_conversation,
             mcp_tools_by_server=mcp_tools_by_server,
+            skill_contents=skill_contents,
         )
 
         # Set up sandbox context if session has an environment.
@@ -567,6 +572,64 @@ class SessionManager:
     # ------------------------------------------------------------------
     # Internal — custom tool protocol layering
     # ------------------------------------------------------------------
+
+    async def _resolve_skill_contents(
+        self, db: AsyncSession, agent: AgentResponse
+    ) -> list[str]:
+        """Read SKILL.md content for each skill referenced by the agent.
+
+        Returns a list of skill markdown strings to be injected into the
+        LLM system prompt by the agent function.
+        """
+        if not agent.skills:
+            return []
+
+        from pathlib import Path
+
+        from castor_server.config import settings
+
+        contents: list[str] = []
+        for skill_ref in agent.skills:
+            sd = skill_ref if isinstance(skill_ref, dict) else skill_ref.model_dump()
+            skill_id = sd.get("skill_id")
+            version = sd.get("version")
+
+            if not skill_id:
+                continue
+
+            # Resolve version — if not pinned, look up latest from DB
+            if not version:
+                skill_resp = await repo.get_skill(db, skill_id)
+                if skill_resp is None:
+                    logger.warning("skill not found id=%s", skill_id)
+                    continue
+                version = skill_resp.latest_version
+                if not version:
+                    logger.warning("skill has no versions id=%s", skill_id)
+                    continue
+
+            # Read SKILL.md from disk
+            skill_dir = Path(settings.files_dir) / "skills" / skill_id / version
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                logger.warning(
+                    "SKILL.md not found skill=%s version=%s path=%s",
+                    skill_id,
+                    version,
+                    skill_md,
+                )
+                continue
+
+            try:
+                text = skill_md.read_text(encoding="utf-8")
+                if text.strip():
+                    contents.append(text)
+            except Exception:
+                logger.exception(
+                    "failed to read SKILL.md skill=%s version=%s", skill_id, version
+                )
+
+        return contents
 
     @staticmethod
     def _inject_external_result(kernel_cp: AgentCheckpoint, result_text: str) -> None:
