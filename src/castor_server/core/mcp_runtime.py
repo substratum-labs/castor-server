@@ -20,12 +20,29 @@ out of scope for the MVP and can be layered on later.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from typing import Any
 
 from castor_server.models.agents import AgentResponse, MCPServer
 
 logger = logging.getLogger("castor_server.mcp_runtime")
+
+# Contextvar holding a mapping of mcp_server_url → auth headers.
+# Set by session_manager before kernel.run() based on vault credentials.
+_mcp_auth: contextvars.ContextVar[dict[str, dict[str, str]]] = contextvars.ContextVar(
+    "mcp_auth", default={}
+)
+
+
+def set_mcp_auth(auth_map: dict[str, dict[str, str]]) -> contextvars.Token:
+    """Set per-URL auth headers for MCP calls. Returns a reset token."""
+    return _mcp_auth.set(auth_map)
+
+
+def clear_mcp_auth(token: contextvars.Token) -> None:
+    _mcp_auth.reset(token)
+
 
 # Tool spec format used by the LLM (OpenAI function-calling shape) plus
 # our own metadata to route the call back to the right MCP server.
@@ -106,8 +123,12 @@ async def call_mcp_tool(
     mcp_server_url: str,
     tool_name: str,
     arguments: dict[str, Any],
+    auth_headers: dict[str, str] | None = None,
 ) -> str:
     """Open a transient MCP session and call ``tool_name`` with ``arguments``.
+
+    If ``auth_headers`` is provided, they are passed to the transport as
+    extra HTTP headers (e.g. ``{"Authorization": "Bearer <token>"}``).
 
     Returns the tool result as a string. If the tool returns multiple
     content blocks, they are concatenated. Errors are returned as text
@@ -117,7 +138,14 @@ async def call_mcp_tool(
     from mcp.client.streamable_http import streamablehttp_client
 
     try:
-        async with streamablehttp_client(mcp_server_url) as (read, write, _):
+        transport_kwargs: dict[str, Any] = {}
+        if auth_headers:
+            transport_kwargs["headers"] = auth_headers
+        async with streamablehttp_client(mcp_server_url, **transport_kwargs) as (
+            read,
+            write,
+            _,
+        ):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(tool_name, arguments)

@@ -332,6 +332,16 @@ class SessionManager:
                 )
                 sandbox_token = set_sandbox(sbx)
 
+        # Set up MCP auth from vault credentials.
+        mcp_auth_token = None
+        vault_ids = session_data.vault_ids if session_data else []
+        if vault_ids:
+            mcp_auth_map = await self._build_mcp_auth_map(db, vault_ids)
+            if mcp_auth_map:
+                from castor_server.core.mcp_runtime import set_mcp_auth
+
+                mcp_auth_token = set_mcp_auth(mcp_auth_map)
+
         try:
             kernel_cp = await kernel.run(agent_fn, checkpoint=kernel_cp)
         except Exception as e:
@@ -362,6 +372,10 @@ class SessionManager:
         finally:
             if sandbox_token is not None:
                 clear_sandbox(sandbox_token)
+            if mcp_auth_token is not None:
+                from castor_server.core.mcp_runtime import clear_mcp_auth
+
+                clear_mcp_auth(mcp_auth_token)
             # NOTE: do NOT mirror latest_conversation back into messages.
             # The kernel's replay-on-resume requires ``messages`` to be the
             # exact original input each time agent_fn is called. The
@@ -572,6 +586,25 @@ class SessionManager:
     # ------------------------------------------------------------------
     # Internal — custom tool protocol layering
     # ------------------------------------------------------------------
+
+    async def _build_mcp_auth_map(
+        self, db: AsyncSession, vault_ids: list[str]
+    ) -> dict[str, dict[str, str]]:
+        """Build a URL → auth-headers mapping from vault credentials.
+
+        Looks up all active credentials in the given vaults and returns
+        a dict suitable for ``set_mcp_auth()``:
+        ``{mcp_server_url: {"Authorization": "Bearer <token>"}}``
+        """
+        cred_rows = await repo.get_credentials_for_vaults(db, vault_ids)
+        auth_map: dict[str, dict[str, str]] = {}
+        for row in cred_rows:
+            url = row.mcp_server_url
+            if row.auth_type == "static_bearer" and row.token:
+                auth_map[url] = {"Authorization": f"Bearer {row.token}"}
+            elif row.auth_type == "mcp_oauth" and row.access_token:
+                auth_map[url] = {"Authorization": f"Bearer {row.access_token}"}
+        return auth_map
 
     async def _resolve_skill_contents(
         self, db: AsyncSession, agent: AgentResponse

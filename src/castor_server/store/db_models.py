@@ -136,3 +136,43 @@ class SkillVersionRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+
+
+class VaultRow(Base):
+    __tablename__ = "vaults"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CredentialRow(Base):
+    __tablename__ = "credentials"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    vault_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    auth_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    mcp_server_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at_str: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_expires_at_str: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

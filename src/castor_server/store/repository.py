@@ -18,15 +18,22 @@ from castor_server.models.sessions import (
     SessionUsage,
 )
 from castor_server.models.skills import SkillResponse, SkillVersionResponse
+from castor_server.models.vaults import (
+    CredentialAuthResponse,
+    CredentialResponse,
+    VaultResponse,
+)
 
 from .db_models import (
     AgentRow,
+    CredentialRow,
     EnvironmentRow,
     EventRow,
     FileRow,
     SessionRow,
     SkillRow,
     SkillVersionRow,
+    VaultRow,
 )
 
 # ---------------------------------------------------------------------------
@@ -784,3 +791,266 @@ async def list_skill_versions(
     )
     result = await db.execute(stmt)
     return [_skill_version_row_to_response(r) for r in result.scalars().all()]
+
+
+# ---------------------------------------------------------------------------
+# Vaults
+# ---------------------------------------------------------------------------
+
+
+def _ts(dt: datetime) -> str:
+    return dt.isoformat(timespec="milliseconds") + "Z"
+
+
+def _vault_row_to_response(row: VaultRow) -> VaultResponse:
+    return VaultResponse(
+        id=row.id,
+        display_name=row.display_name,
+        metadata={k: v for k, v in (row.metadata_json or {}).items() if v is not None},
+        created_at=_ts(row.created_at),
+        updated_at=_ts(row.updated_at),
+        archived_at=_ts(row.archived_at) if row.archived_at else None,
+    )
+
+
+async def create_vault(
+    db: AsyncSession, *, display_name: str, metadata: dict | None = None
+) -> VaultResponse:
+    now = datetime.utcnow()
+    row = VaultRow(
+        id=gen_id("vault"),
+        display_name=display_name,
+        metadata_json=metadata or {},
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _vault_row_to_response(row)
+
+
+async def get_vault(db: AsyncSession, vault_id: str) -> VaultResponse | None:
+    stmt = select(VaultRow).where(VaultRow.id == vault_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    return _vault_row_to_response(row) if row else None
+
+
+async def list_vaults(
+    db: AsyncSession, *, limit: int = 20, include_archived: bool = False
+) -> list[VaultResponse]:
+    stmt = select(VaultRow)
+    if not include_archived:
+        stmt = stmt.where(VaultRow.archived_at.is_(None))
+    stmt = stmt.order_by(VaultRow.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return [_vault_row_to_response(r) for r in result.scalars().all()]
+
+
+async def update_vault(
+    db: AsyncSession, vault_id: str, **updates: Any
+) -> VaultResponse | None:
+    stmt = select(VaultRow).where(VaultRow.id == vault_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    if "display_name" in updates and updates["display_name"] is not None:
+        row.display_name = updates["display_name"]
+    if "metadata" in updates and updates["metadata"] is not None:
+        row.metadata_json = updates["metadata"]
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+    return _vault_row_to_response(row)
+
+
+async def delete_vault(db: AsyncSession, vault_id: str) -> bool:
+    stmt = select(VaultRow).where(VaultRow.id == vault_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.commit()
+    return True
+
+
+async def archive_vault(db: AsyncSession, vault_id: str) -> VaultResponse | None:
+    stmt = select(VaultRow).where(VaultRow.id == vault_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    row.archived_at = datetime.utcnow()
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+    return _vault_row_to_response(row)
+
+
+# ---------------------------------------------------------------------------
+# Credentials
+# ---------------------------------------------------------------------------
+
+
+def _cred_row_to_response(row: CredentialRow) -> CredentialResponse:
+    return CredentialResponse(
+        id=row.id,
+        vault_id=row.vault_id,
+        display_name=row.display_name,
+        auth=CredentialAuthResponse(
+            type=row.auth_type,
+            mcp_server_url=row.mcp_server_url,
+        ),
+        metadata={k: v for k, v in (row.metadata_json or {}).items() if v is not None},
+        created_at=_ts(row.created_at),
+        updated_at=_ts(row.updated_at),
+        archived_at=_ts(row.archived_at) if row.archived_at else None,
+    )
+
+
+async def create_credential(
+    db: AsyncSession,
+    *,
+    vault_id: str,
+    auth_type: str,
+    mcp_server_url: str,
+    display_name: str | None = None,
+    token: str | None = None,
+    access_token: str | None = None,
+    expires_at: str | None = None,
+    refresh_token: str | None = None,
+    refresh_expires_at: str | None = None,
+    metadata: dict | None = None,
+) -> CredentialResponse:
+    now = datetime.utcnow()
+    row = CredentialRow(
+        id=gen_id("cred"),
+        vault_id=vault_id,
+        display_name=display_name,
+        auth_type=auth_type,
+        mcp_server_url=mcp_server_url,
+        token=token,
+        access_token=access_token,
+        expires_at_str=expires_at,
+        refresh_token=refresh_token,
+        refresh_expires_at_str=refresh_expires_at,
+        metadata_json=metadata or {},
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _cred_row_to_response(row)
+
+
+async def get_credential(
+    db: AsyncSession, vault_id: str, credential_id: str
+) -> CredentialResponse | None:
+    stmt = select(CredentialRow).where(
+        CredentialRow.id == credential_id,
+        CredentialRow.vault_id == vault_id,
+    )
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    return _cred_row_to_response(row) if row else None
+
+
+async def list_credentials(
+    db: AsyncSession,
+    vault_id: str,
+    *,
+    limit: int = 20,
+    include_archived: bool = False,
+) -> list[CredentialResponse]:
+    stmt = select(CredentialRow).where(CredentialRow.vault_id == vault_id)
+    if not include_archived:
+        stmt = stmt.where(CredentialRow.archived_at.is_(None))
+    stmt = stmt.order_by(CredentialRow.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return [_cred_row_to_response(r) for r in result.scalars().all()]
+
+
+async def update_credential(
+    db: AsyncSession,
+    vault_id: str,
+    credential_id: str,
+    **updates: Any,
+) -> CredentialResponse | None:
+    stmt = select(CredentialRow).where(
+        CredentialRow.id == credential_id,
+        CredentialRow.vault_id == vault_id,
+    )
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    for key in (
+        "display_name",
+        "auth_type",
+        "mcp_server_url",
+        "token",
+        "access_token",
+        "expires_at_str",
+        "refresh_token",
+        "refresh_expires_at_str",
+        "metadata",
+    ):
+        if key in updates and updates[key] is not None:
+            col = "metadata_json" if key == "metadata" else key
+            setattr(row, col, updates[key])
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+    return _cred_row_to_response(row)
+
+
+async def delete_credential(
+    db: AsyncSession, vault_id: str, credential_id: str
+) -> bool:
+    stmt = select(CredentialRow).where(
+        CredentialRow.id == credential_id,
+        CredentialRow.vault_id == vault_id,
+    )
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.commit()
+    return True
+
+
+async def archive_credential(
+    db: AsyncSession, vault_id: str, credential_id: str
+) -> CredentialResponse | None:
+    stmt = select(CredentialRow).where(
+        CredentialRow.id == credential_id,
+        CredentialRow.vault_id == vault_id,
+    )
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    row.archived_at = datetime.utcnow()
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+    return _cred_row_to_response(row)
+
+
+async def get_credentials_for_vaults(
+    db: AsyncSession, vault_ids: list[str]
+) -> list[CredentialRow]:
+    """Fetch all active credentials for a set of vault IDs (for MCP auth injection)."""
+    if not vault_ids:
+        return []
+    stmt = select(CredentialRow).where(
+        CredentialRow.vault_id.in_(vault_ids),
+        CredentialRow.archived_at.is_(None),
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())

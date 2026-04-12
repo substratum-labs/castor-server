@@ -33,11 +33,21 @@ async def mcp_call(
     All MCP tool calls in agent_fn route through this single syscall so
     that the kernel's syscall_log captures them for replay. Each call
     opens a transient streamable HTTP session to the MCP server.
+
+    Auth headers are looked up from the ``_mcp_auth`` contextvar, which
+    the session_manager populates from vault credentials before each
+    kernel.run().
     """
+    from castor_server.core.mcp_runtime import _mcp_auth
+
+    auth_map = _mcp_auth.get({})
+    auth_headers = auth_map.get(mcp_server_url)
+
     return await call_mcp_tool(
         mcp_server_url=mcp_server_url,
         tool_name=tool_name,
         arguments=arguments or {},
+        auth_headers=auth_headers,
     )
 
 
