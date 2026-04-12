@@ -17,8 +17,17 @@ from castor_server.models.sessions import (
     SessionStats,
     SessionUsage,
 )
+from castor_server.models.skills import SkillResponse, SkillVersionResponse
 
-from .db_models import AgentRow, EnvironmentRow, EventRow, FileRow, SessionRow
+from .db_models import (
+    AgentRow,
+    EnvironmentRow,
+    EventRow,
+    FileRow,
+    SessionRow,
+    SkillRow,
+    SkillVersionRow,
+)
 
 # ---------------------------------------------------------------------------
 # Agents
@@ -654,3 +663,124 @@ async def delete_file(db: AsyncSession, file_id: str) -> bool:
     await db.delete(row)
     await db.commit()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Skills
+# ---------------------------------------------------------------------------
+
+
+def _skill_row_to_response(row: SkillRow) -> SkillResponse:
+    return SkillResponse(
+        id=row.id,
+        display_title=row.display_title,
+        source=row.source,
+        latest_version=row.latest_version,
+        created_at=row.created_at.isoformat(timespec="milliseconds") + "Z",
+        updated_at=row.updated_at.isoformat(timespec="milliseconds") + "Z",
+    )
+
+
+def _skill_version_row_to_response(row: SkillVersionRow) -> SkillVersionResponse:
+    return SkillVersionResponse(
+        id=row.id,
+        skill_id=row.skill_id,
+        version=row.version,
+        name=row.name,
+        description=row.description,
+        directory=row.directory,
+        created_at=row.created_at.isoformat(timespec="milliseconds") + "Z",
+    )
+
+
+async def create_skill(
+    db: AsyncSession,
+    *,
+    skill_id: str,
+    display_title: str | None = None,
+    source: str = "custom",
+) -> SkillResponse:
+    now = datetime.utcnow()
+    row = SkillRow(
+        id=skill_id,
+        display_title=display_title,
+        source=source,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _skill_row_to_response(row)
+
+
+async def get_skill(db: AsyncSession, skill_id: str) -> SkillResponse | None:
+    stmt = select(SkillRow).where(SkillRow.id == skill_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    return _skill_row_to_response(row) if row else None
+
+
+async def list_skills(db: AsyncSession, *, limit: int = 20) -> list[SkillResponse]:
+    stmt = select(SkillRow).order_by(SkillRow.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return [_skill_row_to_response(r) for r in result.scalars().all()]
+
+
+async def delete_skill(db: AsyncSession, skill_id: str) -> bool:
+    stmt = select(SkillRow).where(SkillRow.id == skill_id)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.commit()
+    return True
+
+
+async def create_skill_version(
+    db: AsyncSession,
+    *,
+    version_id: str,
+    skill_id: str,
+    version: str,
+    name: str = "",
+    description: str = "",
+    directory: str = "",
+) -> SkillVersionResponse:
+    row = SkillVersionRow(
+        id=version_id,
+        skill_id=skill_id,
+        version=version,
+        name=name,
+        description=description,
+        directory=directory,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    # Update the parent skill's latest_version
+    skill_stmt = select(SkillRow).where(SkillRow.id == skill_id)
+    skill_result = await db.execute(skill_stmt)
+    skill_row = skill_result.scalar_one_or_none()
+    if skill_row:
+        skill_row.latest_version = version
+        skill_row.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(row)
+    return _skill_version_row_to_response(row)
+
+
+async def list_skill_versions(
+    db: AsyncSession,
+    skill_id: str,
+    *,
+    limit: int = 20,
+) -> list[SkillVersionResponse]:
+    stmt = (
+        select(SkillVersionRow)
+        .where(SkillVersionRow.skill_id == skill_id)
+        .order_by(SkillVersionRow.created_at.desc())
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return [_skill_version_row_to_response(r) for r in result.scalars().all()]
