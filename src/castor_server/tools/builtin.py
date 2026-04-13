@@ -277,12 +277,73 @@ async def web_fetch(url: str) -> str:
 
 async def web_search(query: str) -> str:
     """Search the web for information."""
-    return (
-        f"Web search for: {query}\n"
-        "Note: Web search requires configuration of a search API backend "
-        "(e.g., SerpAPI, Tavily, or similar). "
-        "Set CASTOR_SEARCH_API_KEY and CASTOR_SEARCH_PROVIDER in environment."
-    )
+    from castor_server.config import settings
+
+    provider = settings.search_provider
+    api_key = settings.search_api_key
+
+    if not api_key or not provider:
+        return (
+            f"Web search for: {query}\n"
+            "Note: Web search requires configuration. Set "
+            "CASTOR_SEARCH_PROVIDER (tavily or serpapi) and "
+            "CASTOR_SEARCH_API_KEY in environment."
+        )
+
+    try:
+        if provider == "tavily":
+            return await _search_tavily(query, api_key)
+        elif provider == "serpapi":
+            return await _search_serpapi(query, api_key)
+        else:
+            return f"Error: Unknown search provider '{provider}'"
+    except Exception as e:
+        return f"Error searching: {e}"
+
+
+async def _search_tavily(query: str, api_key: str) -> str:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": api_key,
+                "query": query,
+                "max_results": 5,
+                "include_answer": True,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    parts: list[str] = []
+    if data.get("answer"):
+        parts.append(f"Answer: {data['answer']}\n")
+    for r in data.get("results", []):
+        title = r.get("title", "")
+        url = r.get("url", "")
+        snippet = r.get("content", "")[:300]
+        parts.append(f"- {title}\n  {url}\n  {snippet}")
+    return "\n".join(parts) if parts else "No results found."
+
+
+async def _search_serpapi(query: str, api_key: str) -> str:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            "https://serpapi.com/search",
+            params={"q": query, "api_key": api_key, "num": 5},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    parts: list[str] = []
+    if data.get("answer_box", {}).get("answer"):
+        parts.append(f"Answer: {data['answer_box']['answer']}\n")
+    for r in data.get("organic_results", [])[:5]:
+        title = r.get("title", "")
+        link = r.get("link", "")
+        snippet = r.get("snippet", "")[:300]
+        parts.append(f"- {title}\n  {link}\n  {snippet}")
+    return "\n".join(parts) if parts else "No results found."
 
 
 async def external_input(payload: dict[str, Any] | None = None) -> str:

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from castor_server.config import settings
 from castor_server.core.auth import require_api_key
+from castor_server.core.rate_limit import check_rate_limit
 from castor_server.store.database import init_db
 
 
@@ -21,10 +22,15 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     await init_db()
-    yield
-    # Cleanup: destroy all active sandboxes
+
+    # GC orphaned sandboxes from previous crashes
     from castor_server.core.sandbox_manager import sandbox_manager
 
+    await sandbox_manager.gc_stale()
+
+    yield
+
+    # Cleanup: destroy all active sandboxes
     await sandbox_manager.destroy_all()
 
 
@@ -65,7 +71,7 @@ def create_app() -> FastAPI:
     from castor_server.api.skills import router as skills_router
     from castor_server.api.vaults import router as vaults_router
 
-    auth_deps = [Depends(require_api_key)]
+    auth_deps = [Depends(check_rate_limit), Depends(require_api_key)]
     app.include_router(agents_router, dependencies=auth_deps)
     app.include_router(environments_router, dependencies=auth_deps)
     app.include_router(sessions_router, dependencies=auth_deps)

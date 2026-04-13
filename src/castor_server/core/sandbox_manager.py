@@ -273,6 +273,26 @@ class SandboxManager:
         for session_id in list(self._sandboxes.keys()):
             await self.destroy_sandbox(session_id)
 
+    async def gc_stale(self) -> int:
+        """Garbage-collect Roche sandboxes not tracked by this process.
+
+        On crash recovery, in-memory state is lost but Docker containers
+        may still be running. This calls the Roche daemon's GC endpoint
+        to clean up orphaned sandboxes. Returns the number destroyed.
+        """
+        try:
+            client = self._get_client()
+            # Roche GC destroys containers whose timeout has expired.
+            # The `all` flag destroys everything not in active sessions.
+            result = await client.gc(all=False)
+            count = len(result) if isinstance(result, list) else 0
+            if count:
+                logger.info("gc_stale destroyed=%d sandboxes", count)
+            return count
+        except Exception:
+            logger.debug("gc_stale skipped (roche unavailable)")
+            return 0
+
 
 # Singleton
 sandbox_manager = SandboxManager()

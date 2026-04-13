@@ -66,6 +66,22 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Rate limiting
+    rate_limit_rpm: int = Field(
+        default=0,
+        description="Max requests per minute per IP. 0 = disabled.",
+    )
+
+    # Web search
+    search_provider: str | None = Field(
+        default=None,
+        description="Search provider: 'tavily' or 'serpapi'. None = disabled.",
+    )
+    search_api_key: str | None = Field(
+        default=None,
+        description="API key for the search provider.",
+    )
+
     # Files API storage
     files_dir: str = Field(
         default="./castor_files",

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC
 from typing import Any
 
 from castor.kernel.journal import InMemoryJournal
@@ -595,6 +596,10 @@ class SessionManager:
         Looks up all active credentials in the given vaults and returns
         a dict suitable for ``set_mcp_auth()``:
         ``{mcp_server_url: {"Authorization": "Bearer <token>"}}``
+
+        For ``mcp_oauth`` credentials with an expired ``access_token``,
+        attempts to refresh using the ``refresh_token`` (if available)
+        and persists the new token back to the database.
         """
         cred_rows = await repo.get_credentials_for_vaults(db, vault_ids)
         auth_map: dict[str, dict[str, str]] = {}
@@ -603,8 +608,81 @@ class SessionManager:
             if row.auth_type == "static_bearer" and row.token:
                 auth_map[url] = {"Authorization": f"Bearer {row.token}"}
             elif row.auth_type == "mcp_oauth" and row.access_token:
-                auth_map[url] = {"Authorization": f"Bearer {row.access_token}"}
+                token = row.access_token
+                if self._is_token_expired(row.expires_at_str) and row.refresh_token:
+                    refreshed = await self._refresh_oauth_token(db, row)
+                    if refreshed:
+                        token = refreshed
+                auth_map[url] = {"Authorization": f"Bearer {token}"}
         return auth_map
+
+    @staticmethod
+    def _is_token_expired(expires_at_str: str | None) -> bool:
+        if not expires_at_str:
+            return False
+        from datetime import datetime
+
+        try:
+            expires = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            return datetime.now(UTC) >= expires
+        except (ValueError, TypeError):
+            return False
+
+    @staticmethod
+    async def _refresh_oauth_token(db: AsyncSession, row: Any) -> str | None:
+        """Attempt to refresh an expired OAuth access token.
+
+        Uses a simple OAuth2 token refresh request. On success, updates
+        the credential row in the database and returns the new access token.
+        Returns None on failure (the caller falls back to the old token).
+        """
+        import httpx
+
+        # The refresh endpoint is typically the MCP server's token URL.
+        # Convention: POST to mcp_server_url + "/oauth/token"
+        token_url = row.mcp_server_url.rstrip("/") + "/oauth/token"
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    token_url,
+                    data={
+                        "grant_type": "refresh_token",
+                        "refresh_token": row.refresh_token,
+                    },
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        "oauth_refresh_failed url=%s status=%d",
+                        token_url,
+                        resp.status_code,
+                    )
+                    return None
+
+                data = resp.json()
+                new_access = data.get("access_token")
+                if not new_access:
+                    return None
+
+                # Update the credential row in DB
+                row.access_token = new_access
+                if data.get("expires_in"):
+                    from datetime import datetime, timedelta
+
+                    new_expires = datetime.now(UTC) + timedelta(
+                        seconds=int(data["expires_in"])
+                    )
+                    row.expires_at_str = new_expires.isoformat()
+                if data.get("refresh_token"):
+                    row.refresh_token = data["refresh_token"]
+                row.updated_at = datetime.utcnow()
+                await db.commit()
+
+                logger.info("oauth_token_refreshed url=%s", row.mcp_server_url)
+                return new_access
+        except Exception:
+            logger.exception("oauth_refresh_error url=%s", row.mcp_server_url)
+            return None
 
     async def _resolve_skill_contents(
         self, db: AsyncSession, agent: AgentResponse
