@@ -105,7 +105,8 @@ history = client.beta.sessions.events.list(session_id=session.id)
 ```
 
 **Verified compatible with `anthropic-python` 0.93.0** for all CRUD operations
-(`agents.*`, `environments.*`, `sessions.*`, `sessions.events.send/.list`).
+(`agents.*`, `environments.*`, `sessions.*`, `sessions.events.*`,
+`models.*`, `files.*`, `skills.*`, `vaults.*`).
 See `scripts/sdk_check.py` for the full validation.
 
 ### Streaming events (SDK workaround required)
@@ -155,14 +156,15 @@ with httpx.stream(
 works fine via the SDK and returns the full event history. Poll on a timer
 if you don't need real-time updates.
 
-## Why use castor-server
+## Why use Castor Server
 
-| | Anthropic Managed Agents | castor-server |
+| | Anthropic Managed Agents | Castor Server |
 |---|---|---|
 | Hosting | Anthropic | Yourself (laptop / VPC / k8s) |
 | Models | Claude only | Any (LiteLLM) |
 | Pricing | $0.08 / active session-hour + token cost | Token cost only |
 | Data residency | Anthropic's infra | Your network |
+| Open source | ❌ | ✅ |
 | Replay & deterministic re-execution | ❌ | ✅ |
 | Budget control per session | ❌ | ✅ |
 | Speculative scan (`/sessions/{id}/scan`) | ❌ | ✅ |
@@ -170,9 +172,24 @@ if you don't need real-time updates.
 | HITL approve / reject / modify | partial | ✅ |
 | Wire-compatible with `anthropic-python` | — | ✅ |
 
+## SDK compatibility
+
+| SDK namespace | Status |
+|---|---|
+| `client.beta.agents.*` | ✅ CRUD + versions + archive |
+| `client.beta.environments.*` | ✅ CRUD + archive |
+| `client.beta.sessions.*` | ✅ CRUD + delete + archive |
+| `client.beta.sessions.events.*` | ✅ send + list + SSE stream |
+| `client.beta.models.*` | ✅ list + get |
+| `client.beta.files.*` | ✅ upload + download + list + delete |
+| `client.beta.skills.*` | ✅ CRUD + versions + runtime injection |
+| `client.beta.vaults.*` | ✅ CRUD + credentials + MCP auth injection |
+| MCP toolset runtime | ✅ discover + call with vault auth |
+| Resources mounting | ✅ github_repository + file |
+
 ## API surface
 
-**Phase 1 — 100% Anthropic-compatible:**
+**Anthropic-compatible endpoints (~50 routes):**
 - `POST/GET /v1/agents` — agent CRUD with versioning
 - `POST/GET /v1/sessions` — session lifecycle
 - `POST /v1/sessions/{id}/events` — `user.message`, `user.tool_confirmation`,
@@ -180,8 +197,12 @@ if you don't need real-time updates.
 - `GET /v1/sessions/{id}/events/stream` — SSE stream of `agent.message`,
   `agent.tool_use`, `session.status_*`, `span.model_request_*`
 - `POST/GET /v1/environments` — sandbox config
+- `GET /v1/models` — list available models
+- `POST/GET /v1/files` — file upload/download
+- `POST/GET /v1/skills` — skill CRUD with versions
+- `POST/GET /v1/vaults` — vault and credential management
 
-**Phase 2 — Castor-only extensions:**
+**Castor-only extensions:**
 - `POST /v1/sessions/{id}/scan` — speculative review of an agent run
 - `POST /v1/sessions/{id}/fork` — fork from a previous step
 - `GET /v1/sessions/{id}/budget` — real-time budget usage
@@ -189,7 +210,14 @@ if you don't need real-time updates.
 
 **Built-in tools** (matches `agent_toolset_20260401`):
 `bash`, `read`, `write`, `edit`, `glob`, `grep`, `web_fetch`, `web_search`.
-All tool execution is sandboxed via [Roche](https://github.com/substratum-labs/roche).
+Tool execution is sandboxed via [Roche](https://github.com/substratum-labs/roche)
+when a session has an `environment_id`.
+
+**Skills runtime:** SKILL.md content from referenced skills is automatically
+injected into the LLM system prompt.
+
+**Vault credentials:** Bearer tokens stored in vaults are automatically
+injected into MCP server connections when sessions reference `vault_ids`.
 
 ## Authentication
 
@@ -208,27 +236,45 @@ All settings via environment variables (prefix `CASTOR_`):
 | `CASTOR_DATABASE_URL` | `sqlite+aiosqlite:///castor_server.db` | SQLAlchemy URL |
 | `CASTOR_API_KEY` | _(unset)_ | Global bearer token (none = open) |
 | `CASTOR_ENABLE_BUDGETS` | `false` | Enforce per-session budgets |
+| `CASTOR_ROCHE_PROVIDER` | `docker` | Sandbox provider |
 | `CASTOR_DEBUG` | `false` | Debug logging |
+
+PostgreSQL: set `CASTOR_DATABASE_URL=postgresql+asyncpg://user:pw@host/db` and
+install with `pip install 'castor-server[postgres]'`.
+
+## API reference
+
+Start the server and open http://localhost:8080/docs for interactive Swagger UI,
+or http://localhost:8080/redoc for the ReDoc-style reference. Both are
+auto-generated from the FastAPI routes and always match the running code.
 
 ## Development
 
 ```bash
 uv sync                          # Install deps
-uv run pytest                    # Run tests
+uv run pytest                    # Run tests (180 passing)
 uv run ruff check src/ tests/    # Lint
 uv run ruff format src/ tests/   # Format
 uv run python scripts/wire_check.py   # End-to-end wire format check
+```
+
+Run tests against PostgreSQL:
+
+```bash
+TEST_DATABASE_URL="postgresql+asyncpg://user:pw@localhost:5432/test" uv run pytest
 ```
 
 ## Project layout
 
 ```
 src/castor_server/
-├── api/         # FastAPI routes
-├── core/        # Session manager, kernel adapter, event bus, LLM adapter
+├── api/         # FastAPI routes (agents, sessions, events, environments,
+│                #   models, files, skills, vaults, extensions)
+├── core/        # Session manager, kernel adapter, agent function,
+│                #   event bus, LLM adapter, MCP runtime, sandbox manager
 ├── models/      # Pydantic schemas (Anthropic-compatible)
-├── store/       # SQLAlchemy persistence
-└── tools/       # Built-in toolset
+├── store/       # SQLAlchemy persistence (SQLite / PostgreSQL)
+└── tools/       # Built-in toolset (sandbox-aware)
 ```
 
 ## License

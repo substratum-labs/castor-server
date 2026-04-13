@@ -5,7 +5,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased] — 0.1.0 (public preview)
 
-First public release. 27 commits, 149 tests passing.
+First public release. 180 tests passing, ~100% SDK namespace coverage.
 
 ### Wire compatibility
 
@@ -117,10 +117,43 @@ First public release. 27 commits, 149 tests passing.
 - `castor_server.client.stream_events` provides a drop-in workaround that
   yields the full event stream correctly.
 
+### Vaults & credentials
+
+- Full Vault CRUD: create, retrieve, update, delete, list, archive.
+- Full Credential CRUD (nested under vaults): create, retrieve, update,
+  delete, list, archive. Two auth types: `static_bearer` and `mcp_oauth`.
+- Credential responses mask sensitive fields (token, access_token never
+  returned in API responses).
+- MCP auth injection: when sessions reference `vault_ids`, credentials
+  matching MCP server URLs are automatically injected as Authorization
+  headers into MCP transport connections.
+
+### Skills runtime injection
+
+- SKILL.md content from skills referenced in `agent.skills` is now read
+  from disk and appended to the LLM system prompt during agent execution.
+- Version resolution: if no version is pinned, the latest version is used.
+
+### Files API
+
+- Upload, download, list, delete file blobs. Metadata in database, blobs
+  on disk under `settings.files_dir`.
+- File resources in sessions are copied into sandboxes via `copy_to`.
+
+### MCP toolset
+
+- Runtime tool discovery from remote MCP servers (streamable HTTP transport).
+- MCP tool calls routed through the kernel's `mcp_call` syscall for replay.
+- Auth headers injected from vault credentials when available.
+
+### Models API
+
+- `GET /v1/models` — list available models from LiteLLM config + mock.
+- `GET /v1/models/{id}` — retrieve specific model.
+
 ### Gaps (not yet implemented)
 
-- Vault API
-- Some Skills features
+- OAuth token auto-refresh for vault credentials
 - Web search tool (stub — needs backend configuration)
 - Horizontal scaling (Redis EventBus, distributed locks, worker pool)
 - OpenTelemetry / Prometheus metrics
