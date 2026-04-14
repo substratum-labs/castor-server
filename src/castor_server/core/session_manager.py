@@ -83,6 +83,60 @@ class SessionManager:
         await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
     # ------------------------------------------------------------------
+    # Synchronous execution (used by OpenAI-compat adaptor)
+    # ------------------------------------------------------------------
+
+    async def run_and_wait(
+        self,
+        db: AsyncSession,
+        session_id: str,
+        content: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Run the agent loop and return collected events (blocking).
+
+        Unlike ``handle_user_message`` (fire-and-forget), this awaits
+        the full agent loop and returns all emitted events as dicts.
+        Used by the OpenAI Responses API adaptor which needs the result
+        in the same HTTP request.
+        """
+        lock = self._get_lock(session_id)
+        async with lock:
+            session = await repo.get_session(db, session_id)
+            if not session:
+                return []
+
+            bus = self.get_bus(session_id)
+
+            # Subscribe to capture events emitted during this run
+            queue = bus.subscribe()
+
+            kernel_cp, messages = await self._load_checkpoint(db, session_id)
+
+            user_text = " ".join(
+                c.get("text", "") for c in content if c.get("type") == "text"
+            )
+            messages.append({"role": "user", "content": user_text})
+
+            await self._emit_running(db, session_id, bus)
+
+            kernel_cp = await self._run_kernel(
+                db, session_id, session.agent, bus, kernel_cp, messages
+            )
+
+            await self._handle_kernel_result(db, session_id, bus, kernel_cp, messages)
+            await self._save_checkpoint(db, session_id, kernel_cp, messages)
+
+            # Drain all events from the queue
+            bus.unsubscribe(queue)
+            collected: list[dict[str, Any]] = []
+            while not queue.empty():
+                evt = queue.get_nowait()
+                if evt is not None:
+                    collected.append(evt)
+
+            return collected
+
+    # ------------------------------------------------------------------
     # Event handlers (called from api/events.py)
     # ------------------------------------------------------------------
 

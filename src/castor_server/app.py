@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     from castor_server.api.extensions import router as extensions_router
     from castor_server.api.files import router as files_router
     from castor_server.api.models import router as models_router
+    from castor_server.api.openai_compat import router as openai_router
     from castor_server.api.sessions import router as sessions_router
     from castor_server.api.skills import router as skills_router
     from castor_server.api.vaults import router as vaults_router
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
     app.include_router(files_router, dependencies=auth_deps)
     app.include_router(skills_router, dependencies=auth_deps)
     app.include_router(vaults_router, dependencies=auth_deps)
+    app.include_router(openai_router, dependencies=auth_deps)
 
     # Health check (no auth — used for monitoring/load balancers)
     @app.get("/health")
