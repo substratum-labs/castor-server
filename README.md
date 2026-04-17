@@ -1,12 +1,13 @@
 # Castor Server
 
-**Self-hosted, model-agnostic Anthropic Managed Agents API.**
+**Self-hosted Agent OS — Castor-native API with Anthropic / OpenAI adapter layers.**
 
-Drop-in replacement for Anthropic's Managed Agents service that you run on
-your own machine or VPC. Bring your own model (Anthropic, OpenRouter, OpenAI,
-local LLMs via LiteLLM). Wire-compatible with the official `anthropic` SDK,
-plus Castor extensions for budget control, speculative review, time-travel
-fork, and HITL modify.
+A Castor-native agent platform that defines its own concepts (agents, sessions,
+environments, events, skills, vaults) and ships Anthropic Managed Agents and
+OpenAI Responses API adapters for migration. Run on your own machine or VPC.
+Bring your own model (Anthropic, OpenRouter, OpenAI, local LLMs via LiteLLM).
+Castor capabilities exposed natively: budget control, speculative scan,
+time-travel fork, HITL modify, full deterministic replay.
 
 ## Install
 
@@ -74,10 +75,11 @@ export OPENAI_API_KEY=sk-...             # for OpenAI
 
 `castor-server run` prints which keys it detected on startup.
 
-## Drop-in replacement for `anthropic-python`
+## Anthropic SDK compatibility (adapter layer)
 
-If you already have code written against the Anthropic Managed Agents API,
-just point your client at castor-server:
+If you have existing code written against Anthropic's Managed Agents API,
+the adapter layer lets you point an unmodified `anthropic-python` client at
+castor-server:
 
 ```python
 from anthropic import Anthropic
