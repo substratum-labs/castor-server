@@ -369,11 +369,13 @@ class SessionManager:
             skill_contents=skill_contents,
         )
 
-        # Set up sandbox context if session has an environment.
-        # Resources (e.g. github_repository) are mounted on first
-        # creation only — sandbox_manager caches the sandbox per
-        # session_id and skips re-mounting on subsequent calls.
+        # Brain-before-body: start sandbox provisioning concurrently
+        # with kernel.run(). The first kernel step is a pure LLM call
+        # (no tool invocation), so the sandbox has time to provision
+        # while the LLM is thinking. The sandbox contextvar is set
+        # once the provisioning task completes, before any tool executes.
         sandbox_token = None
+        sandbox_task = None
         session_data = await repo.get_session(db, session_id)
         if session_data and session_data.environment_id:
             env = await repo.get_environment(db, session_data.environment_id)
@@ -382,10 +384,20 @@ class SessionManager:
                     r if isinstance(r, dict) else r.model_dump(exclude_none=True)
                     for r in (session_data.resources or [])
                 ]
-                sbx = await sandbox_manager.get_or_create(
-                    session_id, env, resources=resources
-                )
-                sandbox_token = set_sandbox(sbx)
+                # If sandbox is already cached, set it immediately
+                existing = sandbox_manager.get_sandbox(session_id)
+                if existing:
+                    sandbox_token = set_sandbox(existing)
+                else:
+                    # Start provisioning in background — will be awaited
+                    # before the first tool call
+                    async def _provision():
+                        sbx = await sandbox_manager.get_or_create(
+                            session_id, env, resources=resources
+                        )
+                        return set_sandbox(sbx)
+
+                    sandbox_task = asyncio.create_task(_provision())
 
         # Set up MCP auth from vault credentials.
         mcp_auth_token = None
@@ -398,6 +410,12 @@ class SessionManager:
                 mcp_auth_token = set_mcp_auth(mcp_auth_map)
 
         try:
+            # If sandbox is provisioning in background, ensure it's ready
+            # before kernel.run starts tool execution. The first step is
+            # always a pure LLM call, so we have a window.
+            if sandbox_task is not None:
+                sandbox_token = await sandbox_task
+
             kernel_cp = await kernel.run(agent_fn, checkpoint=kernel_cp)
         except Exception as e:
             logger.exception("Kernel run error session=%s", session_id)

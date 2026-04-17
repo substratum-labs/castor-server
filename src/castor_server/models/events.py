@@ -212,6 +212,53 @@ class SpanModelRequestEnd(BaseModel):
     processed_at: str = Field(default_factory=now_rfc3339)
 
 
+# ---------------------------------------------------------------------------
+# Memory events
+# ---------------------------------------------------------------------------
+
+
+class MemoryEvictEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["memory.evict"] = "memory.evict"
+    indices: list[int] = Field(default_factory=list)
+    token_count: int = 0
+    summary: str | None = None
+    source: str = "auto"
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
+class MemoryRecallEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["memory.recall"] = "memory.recall"
+    query: str = ""
+    result_count: int = 0
+    source_filter: str | None = None
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
+class MemoryStoreEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["memory.store"] = "memory.store"
+    content_preview: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
+class MemoryPinEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["memory.pin"] = "memory.pin"
+    index: int = 0
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
+class MemoryWatermarkEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["memory.watermark_approached"] = "memory.watermark_approached"
+    token_count: int = 0
+    watermark: int = 0
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
 # Union of all outbound event types
 ServerEvent = (
     AgentMessageEvent
