@@ -70,6 +70,7 @@ def _agent_row_to_response(row: AgentRow) -> AgentResponse:
         tools=row.tools_json,
         mcp_servers=row.mcp_servers_json,
         skills=row.skills_json,
+        agent_fn_factory=row.agent_fn_factory,
         metadata={k: v for k, v in (row.metadata_json or {}).items() if v is not None},
         version=row.version,
         created_at=row.created_at.isoformat(timespec="milliseconds") + "Z",
@@ -93,6 +94,7 @@ async def create_agent(
     mcp_servers: list | None = None,
     skills: list | None = None,
     metadata: dict | None = None,
+    agent_fn_factory: str | None = None,
 ) -> AgentResponse:
     agent_id = gen_id("agent")
     now = datetime.utcnow()
@@ -106,6 +108,7 @@ async def create_agent(
         tools_json=_dump_list(tools),
         mcp_servers_json=_dump_list(mcp_servers),
         skills_json=_dump_list(skills),
+        agent_fn_factory=agent_fn_factory,
         metadata_json=metadata or {},
         created_at=now,
         updated_at=now,

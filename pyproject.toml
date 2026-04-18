@@ -66,6 +66,9 @@ select = ["E", "F", "I", "N", "W", "UP"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+[tool.uv.sources]
+castor-kernel = { path = "../castor", editable = true }
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",

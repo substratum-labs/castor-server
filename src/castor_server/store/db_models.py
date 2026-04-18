@@ -24,6 +24,7 @@ class AgentRow(Base):
     tools_json: Mapped[list] = mapped_column(JSON, default=list)
     mcp_servers_json: Mapped[list] = mapped_column(JSON, default=list)
     skills_json: Mapped[list] = mapped_column(JSON, default=list)
+    agent_fn_factory: Mapped[str | None] = mapped_column(String(512), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

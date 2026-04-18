@@ -108,6 +108,14 @@ class CreateAgentRequest(BaseModel):
     mcp_servers: list[MCPServer] = Field(default_factory=list, max_length=20)
     skills: list[Skill] = Field(default_factory=list, max_length=20)
     metadata: Metadata = Field(default_factory=dict)
+    agent_fn_factory: str | None = Field(
+        default=None,
+        description=(
+            "Optional importable module path (e.g. 'myapp.agent:run') for "
+            "a custom agent_fn callable. When set, this callable is used "
+            "instead of the default ReAct loop. Requires trusted deployment."
+        ),
+    )
 
 
 class UpdateAgentRequest(BaseModel):
@@ -120,6 +128,7 @@ class UpdateAgentRequest(BaseModel):
     mcp_servers: list[MCPServer] | None = None
     skills: list[Skill] | None = None
     metadata: Metadata | None = None
+    agent_fn_factory: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +146,7 @@ class AgentResponse(BaseModel):
     tools: list[ToolDefinition] = Field(default_factory=list)
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     skills: list[Skill] = Field(default_factory=list)
+    agent_fn_factory: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
     version: int = 1
     created_at: str

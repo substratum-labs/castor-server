@@ -40,6 +40,7 @@ async def create_agent_endpoint(
         mcp_servers=body.mcp_servers,
         skills=body.skills,
         metadata=body.metadata,
+        agent_fn_factory=body.agent_fn_factory,
     )
 
 

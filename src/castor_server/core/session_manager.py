@@ -358,16 +358,21 @@ class SessionManager:
         # skills referenced by the agent. Cached per session.
         skill_contents = await self._resolve_skill_contents(db, agent)
 
-        agent_fn = build_agent_fn(
-            agent=agent,
-            messages=messages,
-            bus=bus,
-            db=db,
-            session_id=session_id,
-            latest_conversation=latest_conversation,
-            mcp_tools_by_server=mcp_tools_by_server,
-            skill_contents=skill_contents,
-        )
+        # Use custom agent_fn if configured, otherwise default.
+        custom_factory = getattr(agent, "agent_fn_factory", None)
+        if custom_factory:
+            agent_fn = self._load_agent_fn_factory(custom_factory)
+        else:
+            agent_fn = build_agent_fn(
+                agent=agent,
+                messages=messages,
+                bus=bus,
+                db=db,
+                session_id=session_id,
+                latest_conversation=latest_conversation,
+                mcp_tools_by_server=mcp_tools_by_server,
+                skill_contents=skill_contents,
+            )
 
         # Brain-before-body: start sandbox provisioning concurrently
         # with kernel.run(). The first kernel step is a pure LLM call
@@ -659,6 +664,51 @@ class SessionManager:
     # ------------------------------------------------------------------
     # Internal — custom tool protocol layering
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_agent_fn_factory(factory_path: str):
+        """Import a custom agent_fn callable from a module path.
+
+        Format: ``"module.path:callable_name"`` (e.g. ``"castor.examples.react:run"``).
+
+        Trust gate: only allowed when ``settings.api_key`` is set (single-tenant
+        trusted mode). Multi-tenant deployments without auth should not allow
+        arbitrary code loading.
+        """
+        from castor_server.config import settings
+
+        if not settings.api_key:
+            raise ValueError(
+                "Custom agent_fn_factory requires CASTOR_API_KEY to be set "
+                "(trusted deployment mode). Refusing to load arbitrary code "
+                "in open-access mode."
+            )
+
+        if ":" not in factory_path:
+            raise ValueError(
+                f"agent_fn_factory must be 'module:callable' format, "
+                f"got {factory_path!r}"
+            )
+
+        module_path, _, callable_name = factory_path.partition(":")
+        try:
+            import importlib
+
+            module = importlib.import_module(module_path)
+            fn = getattr(module, callable_name)
+        except (ImportError, AttributeError) as e:
+            raise ValueError(
+                f"Failed to load agent_fn_factory {factory_path!r}: {e}"
+            ) from e
+
+        if not callable(fn):
+            raise ValueError(
+                f"agent_fn_factory {factory_path!r} resolved to "
+                f"{fn!r} which is not callable"
+            )
+
+        logger.info("custom_agent_fn_loaded factory=%s", factory_path)
+        return fn
 
     async def _build_mcp_auth_map(
         self, db: AsyncSession, vault_ids: list[str]

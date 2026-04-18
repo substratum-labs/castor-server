@@ -245,14 +245,44 @@ wheels = [
 [[package]]
 name = "castor-kernel"
 version = "0.5.1"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../castor" }
 dependencies = [
     { name = "pydantic" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/93/13/e2c20eaf782c95cf00539e0148f25f905e546f37166e9bcb2872ea33f64e/castor_kernel-0.5.1.tar.gz", hash = "sha256:17058b5ee7f50aa4b2f609cc40ab1086f9e160da8f6d77bb0d240742030aff56", size = 5181520, upload-time = "2026-04-02T07:13:33.848Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/ea/4954da1e204182600dbe37552e0e248a88202f96a66d2abbc3fa31b30aed/castor_kernel-0.5.1-py3-none-any.whl", hash = "sha256:6c1ddf0baa3dddf88fdf2b8322cc56fa075007bc1e97f31fc8519bdbb3c41331", size = 71012, upload-time = "2026-04-02T07:13:32.312Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "autogen-agentchat", marker = "extra == 'autogen'", specifier = ">=0.4" },
+    { name = "autogen-core", marker = "extra == 'autogen'", specifier = ">=0.4" },
+    { name = "crewai", marker = "extra == 'crewai'", specifier = ">=0.80" },
+    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.1.0" },
+    { name = "google-adk", marker = "extra == 'google-adk'", specifier = ">=0.1" },
+    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=0.2" },
+    { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=0.2" },
+    { name = "litellm", marker = "extra == 'demo'", specifier = ">=1.0" },
+    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
+    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.27" },
+    { name = "mnemos-engine", marker = "extra == 'mnemos'", editable = "../mnemos" },
+    { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.1" },
+    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.20" },
+    { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.20" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=0.1" },
+    { name = "rich", marker = "extra == 'demo'", specifier = ">=13.0" },
+    { name = "smolagents", marker = "extra == 'smolagents'", specifier = ">=1.0" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+]
+provides-extras = ["observability", "smolagents", "pydantic-ai", "langchain", "crewai", "openai-agents", "autogen", "google-adk", "mnemos", "demo", "docs", "mcp"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "hypothesis", specifier = ">=6.0" },
+    { name = "pydantic-ai", specifier = ">=0.1" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "ruff", specifier = ">=0.8" },
 ]
 
 [[package]]
@@ -296,7 +326,7 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.31.0" },
-    { name = "castor-kernel", specifier = ">=0.5.1" },
+    { name = "castor-kernel", editable = "../castor" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },
