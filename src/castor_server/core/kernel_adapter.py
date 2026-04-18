@@ -66,12 +66,21 @@ def build_kernel_for_agent(agent: AgentResponse) -> Castor:
 
     llm_callable = _make_llm_callable(model_id)
 
+    # Wire kernel MMU with persistent ColdStorage + production policy so
+    # auto-eviction goes through the same backend the HTTP memory routes
+    # use (no split-brain between kernel-driven and HTTP-driven memory ops).
+    from castor_server.core.memory_policy import DefaultMemoryPolicy
+    from castor_server.store.cold_storage import SQLiteVecColdStorage
+
     return Castor(
         tools=[*enabled_tools, external_input, mcp_call],
         destructive=hitl_tool_names,
         llm=llm_callable,
         llm_cost=0.03,
         llm_resource="api_usd",
+        cold_storage=SQLiteVecColdStorage(),
+        memory_policy=DefaultMemoryPolicy(summarizer_model=model_id),
+        agent_id=agent.id,
     )
 
 
