@@ -47,9 +47,57 @@ def _print_llm_key_status() -> None:
         )
 
 
+def _check_port(host: str, port: int) -> None:
+    """Verify the port is free before starting uvicorn.
+
+    If the port is already in use, print a helpful message with the PID
+    of the process holding it and exit. Without this check, uvicorn
+    silently fails to bind and requests hit whatever else is on that port.
+    """
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host if host != "0.0.0.0" else "127.0.0.1", port))
+    except OSError:
+        # Try to find which process holds the port
+        pid_info = ""
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            pids = result.stdout.strip()
+            if pids:
+                pid_info = f" (held by PID {pids.splitlines()[0]})"
+        except Exception:
+            pass
+
+        click.secho(
+            f"✗ Port {port} is already in use{pid_info}.",
+            fg="red",
+            err=True,
+        )
+        click.echo(
+            "  Use --port or CASTOR_PORT to pick a different port:",
+            err=True,
+        )
+        click.echo(
+            f"    castor-server run --port {port + 1}",
+            err=True,
+        )
+        raise SystemExit(1)
+    finally:
+        sock.close()
+
+
 @click.group()
 def main():
-    """castor-server: Self-hosted Anthropic Managed Agents API."""
+    """castor-server: Self-hosted Agent OS."""
     pass
 
 
@@ -63,13 +111,19 @@ def run(host: str | None, port: int | None, reload: bool, debug: bool):
     if debug:
         settings.debug = True
 
+    bind_host = host or settings.host
+    bind_port = port or settings.port
+
+    # Check port availability before starting uvicorn (Bug 1 fix)
+    _check_port(bind_host, bind_port)
+
     _print_llm_key_status()
 
     uvicorn.run(
         "castor_server.app:create_app",
         factory=True,
-        host=host or settings.host,
-        port=port or settings.port,
+        host=bind_host,
+        port=bind_port,
         reload=reload,
         log_level="debug" if settings.debug else "info",
     )

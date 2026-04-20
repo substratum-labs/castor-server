@@ -42,10 +42,15 @@ async def create_session_endpoint(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    # Treat empty string as None (anthropic-python SDK requires
+    # environment_id as a non-optional str, so users pass "" for
+    # sessions without an environment).
+    env_id = body.environment_id if body.environment_id else None
+
     return await create_session(
         db,
         agent=agent,
-        environment_id=body.environment_id,
+        environment_id=env_id,
         title=body.title,
         metadata=body.metadata,
         resources=body.resources,
