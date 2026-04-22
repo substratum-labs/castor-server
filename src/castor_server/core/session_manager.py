@@ -62,6 +62,18 @@ class SessionManager:
         # same MMU/ColdStorage instance as kernel.run() (no split-brain).
         self._kernels: dict[str, Any] = {}  # session_id → Castor instance
 
+    def cleanup_session(self, session_id: str) -> None:
+        """Remove all in-memory state for a deleted/archived session.
+
+        Prevents unbounded growth of _kernels, _buses, _locks, etc.
+        on long-running servers.
+        """
+        self._kernels.pop(session_id, None)
+        self._buses.pop(session_id, None)
+        self._locks.pop(session_id, None)
+        self._latest_conversation_by_session.pop(session_id, None)
+        self._mcp_tools_by_session.pop(session_id, None)
+
     def get_kernel(self, session_id: str) -> Any | None:
         """Return the cached kernel for a session (or None if not yet built)."""
         return self._kernels.get(session_id)
@@ -71,6 +83,11 @@ class SessionManager:
 
         Used by HTTP memory routes to avoid split-brain: all memory ops
         go through the same backend instance the kernel uses.
+
+        NOTE: accesses ``kernel._lodge._cold`` (private attrs) because
+        Castor doesn't expose a public accessor yet. Track upstream:
+        coordinate with castor session to add ``Castor.cold_storage``
+        property.
         """
         kernel = self._kernels.get(session_id)
         if kernel is None:

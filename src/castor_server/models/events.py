@@ -221,7 +221,9 @@ class MemoryEvictEvent(BaseModel):
     id: str = Field(default_factory=lambda: gen_id("evt"))
     type: Literal["memory.evict"] = "memory.evict"
     memory_id: str = ""
+    token_count: int = 0
     summary: str | None = None
+    source: str = "auto"
     processed_at: str = Field(default_factory=now_rfc3339)
 
 

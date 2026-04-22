@@ -111,9 +111,12 @@ async def delete_session_endpoint(
     session_id: str,
     db: AsyncSession = Depends(get_session),
 ) -> SessionDeletedResponse:
+    from castor_server.core.session_manager import session_manager
+
     deleted = await delete_session(db, session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
+    session_manager.cleanup_session(session_id)
     return SessionDeletedResponse(id=session_id)
 
 
@@ -122,7 +125,10 @@ async def archive_session_endpoint(
     session_id: str,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
+    from castor_server.core.session_manager import session_manager
+
     result = await archive_session(db, session_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    session_manager.cleanup_session(session_id)
     return result

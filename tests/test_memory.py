@@ -66,9 +66,8 @@ async def test_write(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_read_not_found(client: AsyncClient):
     _, session_id = await _create_session(client)
-    resp = await client.post(
-        f"/v1/sessions/{session_id}/memory/read",
-        json={"memory_id": "999999"},
+    resp = await client.get(
+        f"/v1/sessions/{session_id}/memory/read/999999",
     )
     assert resp.status_code == 200
     assert resp.json()["entry"] is None
@@ -98,9 +97,8 @@ async def test_search_empty(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_delete_nonexistent(client: AsyncClient):
     _, session_id = await _create_session(client)
-    resp = await client.post(
-        f"/v1/sessions/{session_id}/memory/delete",
-        json={"memory_id": "999999"},
+    resp = await client.delete(
+        f"/v1/sessions/{session_id}/memory/delete/999999",
     )
     assert resp.status_code == 200
     assert resp.json()["deleted"] is False

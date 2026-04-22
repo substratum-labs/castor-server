@@ -25,26 +25,24 @@ router = APIRouter(prefix="/v1/sessions/{session_id}/memory", tags=["memory"])
 
 
 class WriteRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     content: str = Field(..., description="Content to store")
     metadata: dict[str, Any] = Field(default_factory=dict)
     pin: bool = False
 
 
-class ReadRequest(BaseModel):
-    memory_id: str
-
-
 class SearchRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     query: str = Field(..., description="Search query for cold storage")
     limit: int = Field(default=5, ge=1, le=50)
     filter: dict[str, Any] | None = None
 
 
-class DeleteRequest(BaseModel):
-    memory_id: str
-
-
 class EvictRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     memory_id: str = Field(..., description="Memory ID to evict to cold storage")
     summary: str | None = None
 
@@ -109,7 +107,10 @@ def _get_cold(session_id: str):
     if cold is not None:
         return cold
 
-    # Fallback: session hasn't run yet, no kernel cached. Use standalone.
+    # Fallback: session hasn't run yet, no kernel cached.
+    # Use standalone instance — shares the same SQLite WAL file
+    # (./castor_cold.db) as the kernel's eventual instance, so data
+    # is consistent. Only in-memory caching differs.
     from castor_server.store.cold_storage import SQLiteVecColdStorage
 
     return SQLiteVecColdStorage()
@@ -179,10 +180,10 @@ async def memory_write(
     return {"status": "ok", "event_id": evt.id}
 
 
-@router.post("/read")
+@router.get("/read/{memory_id}")
 async def memory_read(
     session_id: str,
-    body: ReadRequest,
+    memory_id: str,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Read a specific memory entry by ID (mem_read syscall)."""
@@ -194,10 +195,10 @@ async def memory_read(
     from castor_server.models.events import MemoryReadEvent
 
     cold = _get_cold(session_id)
-    entry = await cold.read(session.agent.id, body.memory_id)
+    entry = await cold.read(session.agent.id, memory_id)
 
     bus = session_manager.get_bus(session_id)
-    evt = MemoryReadEvent(memory_id=body.memory_id, found=entry is not None)
+    evt = MemoryReadEvent(memory_id=memory_id, found=entry is not None)
     await _emit(bus, db, session_id, evt)
 
     return {"entry": entry, "event_id": evt.id}
@@ -232,10 +233,10 @@ async def memory_search(
     return {"results": results, "event_id": evt.id}
 
 
-@router.post("/delete")
+@router.delete("/delete/{memory_id}")
 async def memory_delete(
     session_id: str,
-    body: DeleteRequest,
+    memory_id: str,
     db: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Delete a memory entry (mem_delete syscall, irreversible)."""
@@ -247,10 +248,10 @@ async def memory_delete(
     from castor_server.models.events import MemoryDeleteEvent
 
     cold = _get_cold(session_id)
-    deleted = await cold.delete(session.agent.id, body.memory_id)
+    deleted = await cold.delete(session.agent.id, memory_id)
 
     bus = session_manager.get_bus(session_id)
-    evt = MemoryDeleteEvent(memory_id=body.memory_id, deleted=deleted)
+    evt = MemoryDeleteEvent(memory_id=memory_id, deleted=deleted)
     await _emit(bus, db, session_id, evt)
 
     return {"deleted": deleted, "event_id": evt.id}
@@ -336,6 +337,9 @@ async def memory_protect(
 async def list_cold_entries(
     session_id: str,
     source: str | None = Query(default=None),
+    source_filter: str | None = Query(
+        default=None, deprecated=True, description="Alias for 'source'"
+    ),
     limit: int = Query(default=20, le=100),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_session),
@@ -345,8 +349,11 @@ async def list_cold_entries(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Accept both ?source= and ?source_filter= (backward compat)
+    effective_source = source or source_filter
+
     cold = _get_cold(session_id)
-    f = {"source": source} if source else None
+    f = {"source": effective_source} if effective_source else None
     entries = await cold.list_entries(
         session.agent.id, filter=f, limit=limit, offset=offset
     )
