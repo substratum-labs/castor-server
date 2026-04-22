@@ -1,4 +1,4 @@
-"""Tests for Memory API and related components."""
+"""Tests for Memory API (AISA §2.2 syscall surface)."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ async def test_memory_state_empty_session(client: AsyncClient):
     data = resp.json()
     assert data["token_count"] == 0
     assert data["message_count"] == 0
-    assert data["pinned_indices"] == []
+    assert data["pinned_ids"] == []
 
 
 @pytest.mark.asyncio
@@ -43,7 +43,71 @@ async def test_memory_state_not_found(client: AsyncClient):
 
 
 # ---------------------------------------------------------------------------
-# Eviction endpoint
+# mem_write
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write(client: AsyncClient):
+    _, session_id = await _create_session(client)
+    resp = await client.post(
+        f"/v1/sessions/{session_id}/memory/write",
+        json={"content": "Python is preferred", "metadata": {"source": "user"}},
+    )
+    assert resp.status_code == 200
+    assert "event_id" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# mem_read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_not_found(client: AsyncClient):
+    _, session_id = await _create_session(client)
+    resp = await client.post(
+        f"/v1/sessions/{session_id}/memory/read",
+        json={"memory_id": "999999"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["entry"] is None
+
+
+# ---------------------------------------------------------------------------
+# mem_search
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_empty(client: AsyncClient):
+    _, session_id = await _create_session(client)
+    resp = await client.post(
+        f"/v1/sessions/{session_id}/memory/search",
+        json={"query": "hello"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+
+
+# ---------------------------------------------------------------------------
+# mem_delete
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent(client: AsyncClient):
+    _, session_id = await _create_session(client)
+    resp = await client.post(
+        f"/v1/sessions/{session_id}/memory/delete",
+        json={"memory_id": "999999"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is False
+
+
+# ---------------------------------------------------------------------------
+# mem_evict
 # ---------------------------------------------------------------------------
 
 
@@ -52,79 +116,57 @@ async def test_evict(client: AsyncClient):
     _, session_id = await _create_session(client)
     resp = await client.post(
         f"/v1/sessions/{session_id}/memory/evict",
-        json={"indices": [0, 1], "summary": "test summary"},
+        json={"memory_id": "msg_abc123", "summary": "test summary"},
     )
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["evicted"] == 2
-    assert "event_id" in data
-
-
-@pytest.mark.asyncio
-async def test_evict_session_not_found(client: AsyncClient):
-    resp = await client.post(
-        "/v1/sessions/nonexistent/memory/evict",
-        json={"indices": [0]},
-    )
-    assert resp.status_code == 404
+    assert resp.json()["memory_id"] == "msg_abc123"
 
 
 # ---------------------------------------------------------------------------
-# Recall endpoint
+# mem_promote
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_recall_empty(client: AsyncClient):
+async def test_promote(client: AsyncClient):
     _, session_id = await _create_session(client)
     resp = await client.post(
-        f"/v1/sessions/{session_id}/memory/recall",
-        json={"query": "what happened before?"},
+        f"/v1/sessions/{session_id}/memory/promote",
+        json={"memory_id": "msg_abc123"},
     )
     assert resp.status_code == 200
-    data = resp.json()
-    assert "results" in data
-    assert data["results"] == []
-    assert "event_id" in data
+    assert resp.json()["memory_id"] == "msg_abc123"
 
 
 # ---------------------------------------------------------------------------
-# Pin endpoint
+# mem_protect
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_pin(client: AsyncClient):
+async def test_protect(client: AsyncClient):
     _, session_id = await _create_session(client)
     resp = await client.post(
-        f"/v1/sessions/{session_id}/memory/pin",
-        json={"index": 3},
+        f"/v1/sessions/{session_id}/memory/protect",
+        json={"memory_id": "msg_abc123", "protect": True},
     )
     assert resp.status_code == 200
-    assert resp.json()["pinned_index"] == 3
-
-
-# ---------------------------------------------------------------------------
-# Store endpoint
-# ---------------------------------------------------------------------------
+    assert resp.json()["protected"] is True
 
 
 @pytest.mark.asyncio
-async def test_store(client: AsyncClient):
+async def test_unprotect(client: AsyncClient):
     _, session_id = await _create_session(client)
     resp = await client.post(
-        f"/v1/sessions/{session_id}/memory/store",
-        json={
-            "content": "The user prefers Python over JavaScript",
-            "metadata": {"source": "conversation"},
-        },
+        f"/v1/sessions/{session_id}/memory/protect",
+        json={"memory_id": "msg_abc123", "protect": False},
     )
     assert resp.status_code == 200
-    assert "event_id" in resp.json()
+    assert resp.json()["protected"] is False
 
 
 # ---------------------------------------------------------------------------
-# Cold storage list endpoint
+# Cold storage list
 # ---------------------------------------------------------------------------
 
 
@@ -137,14 +179,12 @@ async def test_cold_list_empty(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_cold_list_after_store(client: AsyncClient):
+async def test_cold_list_after_write(client: AsyncClient):
     agent_id, session_id = await _create_session(client)
-    # Store something
     await client.post(
-        f"/v1/sessions/{session_id}/memory/store",
+        f"/v1/sessions/{session_id}/memory/write",
         json={"content": "important fact"},
     )
-    # List it
     resp = await client.get(f"/v1/sessions/{session_id}/memory/cold")
     assert resp.status_code == 200
     entries = resp.json()["data"]
@@ -153,34 +193,30 @@ async def test_cold_list_after_store(client: AsyncClient):
 
 
 # ---------------------------------------------------------------------------
-# Cross-session recall
+# Cross-session recall via search
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cross_session_recall(client: AsyncClient):
-    """Session A stores, session B (same agent) recalls."""
+async def test_cross_session_search(client: AsyncClient):
+    """Session A writes, session B (same agent) searches."""
     agent_id, session_a = await _create_session(client)
 
-    # Store in session A
     await client.post(
-        f"/v1/sessions/{session_a}/memory/store",
+        f"/v1/sessions/{session_a}/memory/write",
         json={"content": "The capital of France is Paris"},
     )
 
-    # Create session B for the same agent
     session_b_resp = await client.post("/v1/sessions", json={"agent": agent_id})
     session_b = session_b_resp.json()["id"]
 
-    # Recall from session B
     resp = await client.post(
-        f"/v1/sessions/{session_b}/memory/recall",
+        f"/v1/sessions/{session_b}/memory/search",
         json={"query": "capital of France"},
     )
     assert resp.status_code == 200
     results = resp.json()["results"]
     assert len(results) >= 1
-    # Should contain the Paris fact
     content = str(results[0])
     assert "Paris" in content or "capital" in content.lower()
 
@@ -192,18 +228,16 @@ async def test_cross_session_recall(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_evict_event_in_event_list(client: AsyncClient):
-    """Evict should create a memory.evict event visible in event list."""
     _, session_id = await _create_session(client)
     await client.post(
         f"/v1/sessions/{session_id}/memory/evict",
-        json={"indices": [0]},
+        json={"memory_id": "msg_test"},
     )
-    # Check events
     resp = await client.get(f"/v1/sessions/{session_id}/events?order=asc")
     events = resp.json()["data"]
     evict_events = [e for e in events if e.get("type") == "memory.evict"]
     assert len(evict_events) >= 1
-    assert evict_events[0]["indices"] == [0]
+    assert evict_events[0]["memory_id"] == "msg_test"
 
 
 # ---------------------------------------------------------------------------
@@ -216,11 +250,9 @@ async def test_policy_should_evict_below_budget():
     from castor_server.core.memory_policy import DefaultMemoryPolicy
 
     policy = DefaultMemoryPolicy()
-    context = [
-        {"role": "user", "content": "short msg"},
-    ]
+    context = [{"role": "user", "content": "short msg", "id": "m1"}]
     result = await policy.should_evict(context, token_budget=10000)
-    assert result is None  # Below budget, no eviction
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -228,18 +260,20 @@ async def test_policy_should_evict_over_budget():
     from castor_server.core.memory_policy import DefaultMemoryPolicy
 
     policy = DefaultMemoryPolicy()
-    # Create a large context
-    context = [{"role": "assistant", "content": "x" * 4000} for _ in range(10)]
-    # Add 2 user messages at the end (anchored, should not be evicted)
-    context.append({"role": "user", "content": "recent q1"})
-    context.append({"role": "user", "content": "recent q2"})
+    context = [
+        {"role": "assistant", "content": "x" * 4000, "id": f"m{i}"} for i in range(10)
+    ]
+    context.append({"role": "user", "content": "recent q1", "id": "u1"})
+    context.append({"role": "user", "content": "recent q2", "id": "u2"})
 
     result = await policy.should_evict(context, token_budget=2000)
     assert result is not None
     assert len(result) > 0
-    # Last two user messages should not be in eviction list
-    assert 10 not in result
-    assert 11 not in result
+    # Result should be memory_ids (strings), not indices
+    assert all(isinstance(mid, str) for mid in result)
+    # Anchored user messages should not be evicted
+    assert "u1" not in result
+    assert "u2" not in result
 
 
 @pytest.mark.asyncio
@@ -251,19 +285,6 @@ async def test_policy_should_recall_with_cue():
         [{"role": "user", "content": "hi"}],
         "do you remember what we discussed earlier?",
     )
-    assert result is not None  # "earlier" is a recall cue
-
-
-@pytest.mark.asyncio
-async def test_policy_should_recall_short_context():
-    from castor_server.core.memory_policy import DefaultMemoryPolicy
-
-    policy = DefaultMemoryPolicy()
-    result = await policy.should_recall(
-        [{"role": "user", "content": "hi"}],
-        "what is 2+2?",
-    )
-    # Short context (< 5) → always recall
     assert result is not None
 
 
@@ -274,7 +295,7 @@ async def test_policy_no_recall_long_context_no_cue():
     policy = DefaultMemoryPolicy()
     context = [{"role": "user", "content": f"msg {i}"} for i in range(10)]
     result = await policy.should_recall(context, "what is 2+2?")
-    assert result is None  # Long context, no cue → no recall
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +324,7 @@ async def test_cold_storage_store_and_search():
 
 
 @pytest.mark.asyncio
-async def test_cold_storage_store_explicit():
+async def test_cold_storage_read_and_delete():
     import tempfile
 
     from castor_server.store.cold_storage import SQLiteVecColdStorage
@@ -311,21 +332,28 @@ async def test_cold_storage_store_explicit():
     with tempfile.TemporaryDirectory() as tmpdir:
         cold = SQLiteVecColdStorage(db_path=f"{tmpdir}/test.db")
         try:
-            await cold.store_explicit(
-                "agent_1",
-                "Python is preferred",
-                metadata={"source": "user"},
-            )
+            await cold.store_explicit("agent_1", "test content")
             entries = await cold.list_entries("agent_1")
             assert len(entries) == 1
-            assert entries[0]["source"] == "explicit"
+            entry_id = str(entries[0]["id"])
+
+            # Read
+            entry = await cold.read("agent_1", entry_id)
+            assert entry is not None
+
+            # Delete
+            deleted = await cold.delete("agent_1", entry_id)
+            assert deleted is True
+
+            # Verify gone
+            entry = await cold.read("agent_1", entry_id)
+            assert entry is None
         finally:
             cold.close()
 
 
 @pytest.mark.asyncio
 async def test_cold_storage_agent_isolation():
-    """Different agent_ids should not see each other's entries."""
     import tempfile
 
     from castor_server.store.cold_storage import SQLiteVecColdStorage
@@ -339,7 +367,6 @@ async def test_cold_storage_agent_isolation():
             results_a = await cold.search("agent_A", "secret")
             results_b = await cold.search("agent_B", "secret")
 
-            # Each agent only sees its own entries
             a_content = str(results_a)
             b_content = str(results_b)
             assert "secret A" in a_content

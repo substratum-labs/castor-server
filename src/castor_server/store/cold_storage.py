@@ -122,13 +122,16 @@ class SQLiteVecColdStorage:
         agent_id: str,
         query: str,
         max_results: int = 5,
-        source_filter: str | None = None,
+        filter: dict | None = None,
     ) -> list[Any]:
-        """Retrieve relevant messages via vector similarity search."""
+        """Retrieve relevant messages via vector similarity search.
+
+        ``filter`` is a dict of field → value constraints. Supported keys:
+        ``source`` (provenance filter, e.g. ``{"source": "eviction"}``).
+        """
         conn = self._get_conn()
         query_embedding = self._embed(query)
 
-        # Vector search
         rows = conn.execute(
             """
             SELECT e.entry_id, distance
@@ -153,9 +156,9 @@ class SQLiteVecColdStorage:
         """
         params: list[Any] = list(entry_ids) + [agent_id]
 
-        if source_filter:
+        if filter and filter.get("source"):
             sql += " AND source = ?"
-            params.append(source_filter)
+            params.append(filter["source"])
 
         results = conn.execute(sql, params).fetchall()
 
@@ -173,6 +176,39 @@ class SQLiteVecColdStorage:
             )
 
         return output
+
+    async def read(self, agent_id: str, memory_id: str) -> dict[str, Any] | None:
+        """Lookup a single entry by ID."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT id, content_json, summary, source, created_at"
+            " FROM cold_entries WHERE id = ? AND agent_id = ?",
+            (memory_id, agent_id),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "messages": json.loads(row[1]),
+            "summary": row[2],
+            "source": row[3],
+            "created_at": row[4],
+        }
+
+    async def delete(self, agent_id: str, memory_id: str) -> bool:
+        """Delete a single entry by ID (irreversible)."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "DELETE FROM cold_entries WHERE id = ? AND agent_id = ?",
+            (memory_id, agent_id),
+        )
+        # Also remove embedding
+        conn.execute(
+            "DELETE FROM cold_embeddings WHERE entry_id = ?",
+            (memory_id,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
     async def store_explicit(
         self,
@@ -212,7 +248,7 @@ class SQLiteVecColdStorage:
         self,
         agent_id: str,
         *,
-        source_filter: str | None = None,
+        filter: dict | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -224,9 +260,9 @@ class SQLiteVecColdStorage:
         )
         params: list[Any] = [agent_id]
 
-        if source_filter:
+        if filter and filter.get("source"):
             sql += " AND source = ?"
-            params.append(source_filter)
+            params.append(filter["source"])
 
         sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])

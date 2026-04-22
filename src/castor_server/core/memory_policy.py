@@ -52,9 +52,10 @@ class DefaultMemoryPolicy:
         self,
         context_history: list[Any],
         token_budget: int,
-    ) -> list[int] | None:
+    ) -> list[str] | None:
         """FIFO eviction: drop oldest messages until below token_budget.
 
+        Returns a list of memory_ids (CastorMessage.id) to evict, or None.
         Never evict the last ``anchor_user_turns`` user messages to
         preserve conversational anchoring.
         """
@@ -78,7 +79,7 @@ class DefaultMemoryPolicy:
                     protected.add(i)
 
         # Evict from oldest, skip protected and pinned
-        evict_indices: list[int] = []
+        evict_ids: list[str] = []
         running_total = total
         for i, msg in enumerate(context_history):
             if running_total <= token_budget:
@@ -88,10 +89,12 @@ class DefaultMemoryPolicy:
             pinned = msg.pinned if hasattr(msg, "pinned") else msg.get("pinned", False)
             if pinned:
                 continue
-            evict_indices.append(i)
+            # Get memory_id — CastorMessage.id or fallback to str(index)
+            mid = getattr(msg, "id", None) or msg.get("id") or str(i)
+            evict_ids.append(mid)
             running_total -= _estimate_tokens(msg)
 
-        return evict_indices if evict_indices else None
+        return evict_ids if evict_ids else None
 
     async def generate_summary(
         self,

@@ -220,34 +220,56 @@ class SpanModelRequestEnd(BaseModel):
 class MemoryEvictEvent(BaseModel):
     id: str = Field(default_factory=lambda: gen_id("evt"))
     type: Literal["memory.evict"] = "memory.evict"
-    indices: list[int] = Field(default_factory=list)
-    token_count: int = 0
+    memory_id: str = ""
     summary: str | None = None
-    source: str = "auto"
     processed_at: str = Field(default_factory=now_rfc3339)
 
 
-class MemoryRecallEvent(BaseModel):
+class MemoryPromoteEvent(BaseModel):
     id: str = Field(default_factory=lambda: gen_id("evt"))
-    type: Literal["memory.recall"] = "memory.recall"
-    query: str = ""
-    result_count: int = 0
-    source_filter: str | None = None
+    type: Literal["memory.promote"] = "memory.promote"
+    memory_id: str = ""
     processed_at: str = Field(default_factory=now_rfc3339)
 
 
-class MemoryStoreEvent(BaseModel):
+class MemoryProtectEvent(BaseModel):
     id: str = Field(default_factory=lambda: gen_id("evt"))
-    type: Literal["memory.store"] = "memory.store"
+    type: Literal["memory.protect"] = "memory.protect"
+    memory_id: str = ""
+    protect: bool = True
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
+class MemoryWriteEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["memory.write"] = "memory.write"
+    memory_id: str = ""
     content_preview: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
     processed_at: str = Field(default_factory=now_rfc3339)
 
 
-class MemoryPinEvent(BaseModel):
+class MemoryReadEvent(BaseModel):
     id: str = Field(default_factory=lambda: gen_id("evt"))
-    type: Literal["memory.pin"] = "memory.pin"
-    index: int = 0
+    type: Literal["memory.read"] = "memory.read"
+    memory_id: str = ""
+    found: bool = True
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
+class MemorySearchEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["memory.search"] = "memory.search"
+    query: str = ""
+    result_count: int = 0
+    processed_at: str = Field(default_factory=now_rfc3339)
+
+
+class MemoryDeleteEvent(BaseModel):
+    id: str = Field(default_factory=lambda: gen_id("evt"))
+    type: Literal["memory.delete"] = "memory.delete"
+    memory_id: str = ""
+    deleted: bool = True
     processed_at: str = Field(default_factory=now_rfc3339)
 
 
