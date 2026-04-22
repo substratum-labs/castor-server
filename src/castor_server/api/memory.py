@@ -96,7 +96,20 @@ async def _emit(bus, db, session_id, event):
     )
 
 
-def _get_cold():
+def _get_cold(session_id: str):
+    """Get the ColdStorage instance for a session.
+
+    Uses the session's cached kernel MMU to avoid split-brain. Falls back
+    to a standalone instance if the kernel hasn't been built yet (e.g. the
+    session has never run — only CRUD'd).
+    """
+    from castor_server.core.session_manager import session_manager
+
+    cold = session_manager.get_cold_storage(session_id)
+    if cold is not None:
+        return cold
+
+    # Fallback: session hasn't run yet, no kernel cached. Use standalone.
     from castor_server.store.cold_storage import SQLiteVecColdStorage
 
     return SQLiteVecColdStorage()
@@ -156,13 +169,8 @@ async def memory_write(
     from castor_server.core.session_manager import session_manager
     from castor_server.models.events import MemoryWriteEvent
 
-    cold = _get_cold()
-    try:
-        await cold.store_explicit(
-            session.agent.id, body.content, metadata=body.metadata
-        )
-    finally:
-        cold.close()
+    cold = _get_cold(session_id)
+    await cold.store_explicit(session.agent.id, body.content, metadata=body.metadata)
 
     bus = session_manager.get_bus(session_id)
     evt = MemoryWriteEvent(content_preview=body.content[:100], metadata=body.metadata)
@@ -185,11 +193,8 @@ async def memory_read(
     from castor_server.core.session_manager import session_manager
     from castor_server.models.events import MemoryReadEvent
 
-    cold = _get_cold()
-    try:
-        entry = await cold.read(session.agent.id, body.memory_id)
-    finally:
-        cold.close()
+    cold = _get_cold(session_id)
+    entry = await cold.read(session.agent.id, body.memory_id)
 
     bus = session_manager.get_bus(session_id)
     evt = MemoryReadEvent(memory_id=body.memory_id, found=entry is not None)
@@ -212,16 +217,13 @@ async def memory_search(
     from castor_server.core.session_manager import session_manager
     from castor_server.models.events import MemorySearchEvent
 
-    cold = _get_cold()
-    try:
-        results = await cold.search(
-            session.agent.id,
-            body.query,
-            max_results=body.limit,
-            filter=body.filter,
-        )
-    finally:
-        cold.close()
+    cold = _get_cold(session_id)
+    results = await cold.search(
+        session.agent.id,
+        body.query,
+        max_results=body.limit,
+        filter=body.filter,
+    )
 
     bus = session_manager.get_bus(session_id)
     evt = MemorySearchEvent(query=body.query, result_count=len(results))
@@ -244,11 +246,8 @@ async def memory_delete(
     from castor_server.core.session_manager import session_manager
     from castor_server.models.events import MemoryDeleteEvent
 
-    cold = _get_cold()
-    try:
-        deleted = await cold.delete(session.agent.id, body.memory_id)
-    finally:
-        cold.close()
+    cold = _get_cold(session_id)
+    deleted = await cold.delete(session.agent.id, body.memory_id)
 
     bus = session_manager.get_bus(session_id)
     evt = MemoryDeleteEvent(memory_id=body.memory_id, deleted=deleted)
@@ -346,13 +345,10 @@ async def list_cold_entries(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    cold = _get_cold()
-    try:
-        f = {"source": source} if source else None
-        entries = await cold.list_entries(
-            session.agent.id, filter=f, limit=limit, offset=offset
-        )
-    finally:
-        cold.close()
+    cold = _get_cold(session_id)
+    f = {"source": source} if source else None
+    entries = await cold.list_entries(
+        session.agent.id, filter=f, limit=limit, offset=offset
+    )
 
     return ColdListResponse(data=[ColdEntry(**e) for e in entries])

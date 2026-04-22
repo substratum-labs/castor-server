@@ -58,6 +58,27 @@ class SessionManager:
         # first kernel run for a session and reused across turns.
         self._mcp_tools_by_session: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._background_tasks: set[asyncio.Task] = set()
+        # Per-session kernel cache. Ensures HTTP memory routes use the
+        # same MMU/ColdStorage instance as kernel.run() (no split-brain).
+        self._kernels: dict[str, Any] = {}  # session_id → Castor instance
+
+    def get_kernel(self, session_id: str) -> Any | None:
+        """Return the cached kernel for a session (or None if not yet built)."""
+        return self._kernels.get(session_id)
+
+    def get_cold_storage(self, session_id: str) -> Any | None:
+        """Return the ColdStorage backend for a session's kernel MMU.
+
+        Used by HTTP memory routes to avoid split-brain: all memory ops
+        go through the same backend instance the kernel uses.
+        """
+        kernel = self._kernels.get(session_id)
+        if kernel is None:
+            return None
+        lodge = getattr(kernel, "_lodge", None)
+        if lodge is None:
+            return None
+        return getattr(lodge, "_cold", None)
 
     def get_bus(self, session_id: str) -> EventBus:
         if session_id not in self._buses:
@@ -341,7 +362,11 @@ class SessionManager:
         """
         from castor_server.tools.builtin import clear_sandbox, set_sandbox
 
-        kernel = build_kernel_for_agent(agent)
+        # Cache kernel per session so HTTP memory routes can access the
+        # same MMU/ColdStorage instance (§2 split-brain fix).
+        if session_id not in self._kernels:
+            self._kernels[session_id] = build_kernel_for_agent(agent)
+        kernel = self._kernels[session_id]
 
         # Side-channel for the latest conversation state. agent_fn writes
         # into this list at every checkpoint (assistant tool_call, tool
