@@ -1,1 +1,1 @@
-../substratum-internal/agent-md/castor-server.md
+../../substratum-internal/agent-md/castor-server.md
