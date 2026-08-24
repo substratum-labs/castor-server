@@ -260,11 +260,13 @@ requires-dist = [
     { name = "google-adk", marker = "extra == 'google-adk'", specifier = ">=0.1" },
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=0.2" },
     { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=0.2" },
+    { name = "langgraph", marker = "extra == 'paper-a-eval'", specifier = "==1.1.2" },
+    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'paper-a-eval'" },
     { name = "litellm", marker = "extra == 'demo'", specifier = ">=1.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.27" },
-    { name = "mnemos-engine", marker = "extra == 'mnemos'", editable = "../mnemos" },
+    { name = "mnemos-engine", marker = "extra == 'mnemos'", git = "https://github.com/substratum-labs/mnemos?rev=ed81ebe06208a1a7d0a8e13e0241f2a9cc6b2e03" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.1" },
     { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.20" },
     { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.20" },
@@ -274,11 +276,13 @@ requires-dist = [
     { name = "smolagents", marker = "extra == 'smolagents'", specifier = ">=1.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
-provides-extras = ["observability", "smolagents", "pydantic-ai", "langchain", "crewai", "openai-agents", "autogen", "google-adk", "mnemos", "demo", "docs", "mcp"]
+provides-extras = ["paper-a-eval", "observability", "smolagents", "pydantic-ai", "langchain", "crewai", "openai-agents", "autogen", "google-adk", "mnemos", "demo", "docs", "mcp"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6.0" },
+    { name = "langgraph", specifier = "==1.1.2" },
+    { name = "langgraph-checkpoint-sqlite" },
     { name = "pydantic-ai", specifier = ">=0.1" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
