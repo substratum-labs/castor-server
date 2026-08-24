@@ -484,19 +484,34 @@ async def list_events(
 # Environments
 # ---------------------------------------------------------------------------
 
+_ENVIRONMENT_REGISTRATION_KEY = "__castor_environment_registration"
+
+
+def _environment_registration(metadata: dict | None) -> dict:
+    return (metadata or {}).get(_ENVIRONMENT_REGISTRATION_KEY, {})
+
 
 def _env_row_to_response(row: EnvironmentRow) -> EnvironmentResponse:
+    registration = _environment_registration(row.metadata_json)
     return EnvironmentResponse(
         id=row.id,
         name=row.name,
         image=row.image,
+        provider=registration.get("provider"),
+        resource_limits=registration.get("resource_limits"),
+        env_vars=registration.get("env_vars", {}),
+        pre_warmed_instances=registration.get("pre_warmed_instances"),
         memory=row.memory,
         cpus=row.cpus,
         timeout_secs=row.timeout_secs,
         network=row.network,
         writable=row.writable,
         network_allowlist=row.network_allowlist_json or [],
-        metadata={k: v for k, v in (row.metadata_json or {}).items() if v is not None},
+        metadata={
+            k: v
+            for k, v in (row.metadata_json or {}).items()
+            if k != _ENVIRONMENT_REGISTRATION_KEY and v is not None
+        },
         created_at=row.created_at.isoformat(timespec="milliseconds") + "Z",
         updated_at=row.updated_at.isoformat(timespec="milliseconds") + "Z",
         archived_at=(
@@ -510,8 +525,13 @@ def _env_row_to_response(row: EnvironmentRow) -> EnvironmentResponse:
 async def create_environment(
     db: AsyncSession,
     *,
+    environment_id: str | None = None,
     name: str,
     image: str = "python:3.12-slim",
+    provider: str | None = None,
+    resource_limits: dict | None = None,
+    env_vars: dict[str, str] | None = None,
+    pre_warmed_instances: int | None = None,
     memory: str | None = None,
     cpus: float | None = None,
     timeout_secs: int = 300,
@@ -520,8 +540,19 @@ async def create_environment(
     network_allowlist: list[str] | None = None,
     metadata: dict | None = None,
 ) -> EnvironmentResponse:
-    env_id = gen_id("env")
+    env_id = environment_id or gen_id("env")
     now = datetime.utcnow()
+    stored_metadata = dict(metadata or {})
+    if any(
+        value is not None
+        for value in (provider, resource_limits, env_vars, pre_warmed_instances)
+    ):
+        stored_metadata[_ENVIRONMENT_REGISTRATION_KEY] = {
+            "provider": provider,
+            "resource_limits": resource_limits,
+            "env_vars": env_vars or {},
+            "pre_warmed_instances": pre_warmed_instances,
+        }
     row = EnvironmentRow(
         id=env_id,
         name=name,
@@ -532,7 +563,7 @@ async def create_environment(
         network=network,
         writable=writable,
         network_allowlist_json=network_allowlist or [],
-        metadata_json=metadata or {},
+        metadata_json=stored_metadata,
         created_at=now,
         updated_at=now,
     )

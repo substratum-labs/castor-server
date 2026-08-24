@@ -30,13 +30,34 @@ async def create_env(
 ) -> EnvironmentResponse:
     return await create_environment(
         db,
+        environment_id=body.environment_id,
         name=body.name,
         image=body.image,
-        memory=body.memory,
-        cpus=body.cpus,
+        provider=body.provider,
+        resource_limits=(
+            body.resource_limits.model_dump() if body.resource_limits else None
+        ),
+        env_vars=body.env_vars,
+        pre_warmed_instances=body.pre_warmed_instances,
+        memory=(
+            body.memory
+            if body.memory is not None
+            else (
+                f"{body.resource_limits.memory_mb}m" if body.resource_limits else None
+            )
+        ),
+        cpus=(body.resource_limits.cpu_cores if body.resource_limits else body.cpus),
         timeout_secs=body.timeout_secs,
-        network=body.network,
-        writable=body.writable,
+        network=(
+            body.resource_limits.network_mode != "none"
+            if body.resource_limits
+            else body.network
+        ),
+        writable=(
+            not body.resource_limits.read_only_rootfs
+            if body.resource_limits
+            else body.writable
+        ),
         network_allowlist=body.network_allowlist,
         metadata=body.metadata,
     )
