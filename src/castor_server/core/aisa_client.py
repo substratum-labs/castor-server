@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 class AisaChannel(StrEnum):
@@ -39,10 +40,18 @@ class AisaOpcode(StrEnum):
 
 @dataclass(frozen=True)
 class AisaResponse:
+    request_id: str
+    status: str
     error_code: str | None = None
-    persistence_disposition: str | None = None
-    journal_entry: str | None = None
-    payload: dict[str, Any] | None = None
+    outcome: dict[str, Any] | None = None
+
+    @property
+    def persistence_disposition(self) -> str | None:
+        return (self.outcome or {}).get("type")
+
+    @property
+    def journal_entry(self) -> str | None:
+        return (self.outcome or {}).get("type")
 
 
 class AisaClient:
@@ -53,28 +62,32 @@ class AisaClient:
         self.channel = channel
 
     async def request(
-        self, opcode: AisaOpcode, payload: dict[str, Any]
+        self,
+        opcode: AisaOpcode,
+        payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
     ) -> AisaResponse:
+        request_id = request_id or str(uuid4())
         request = json.dumps(
-            {"opcode": opcode.value, "payload": payload}, separators=(",", ":")
+            {"request_id": request_id, "op": opcode.value, "payload": payload},
+            separators=(",", ":"),
         ).encode()
         if len(request) > 16 * 1024 * 1024:
-            return AisaResponse(error_code="PayloadTooLarge")
-        reader, writer = await asyncio.open_unix_connection(
-            str(self.socket_path.resolve())
-        )
+            return AisaResponse(request_id, "Error", error_code="PayloadTooLarge")
+        reader, writer = await asyncio.open_unix_connection(str(self.socket_path))
         try:
             writer.write(len(request).to_bytes(4, "big") + request)
             await writer.drain()
             size = int.from_bytes(await reader.readexactly(4), "big")
             if size > 16 * 1024 * 1024:
-                return AisaResponse(error_code="PayloadTooLarge")
+                return AisaResponse(request_id, "Error", error_code="PayloadTooLarge")
             raw = json.loads((await reader.readexactly(size)).decode())
             return AisaResponse(
-                error_code=raw.get("error_code"),
-                persistence_disposition=raw.get("persistence_disposition"),
-                journal_entry=raw.get("journal_entry"),
-                payload=raw.get("payload"),
+                request_id=str(raw.get("request_id", request_id)),
+                status=str(raw.get("status", "Error")),
+                error_code=(raw.get("error") or {}).get("code"),
+                outcome=raw.get("outcome"),
             )
         finally:
             writer.close()

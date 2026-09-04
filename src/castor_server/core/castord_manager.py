@@ -1,49 +1,22 @@
-"""Per-session castord supervision with isolated agent and control sockets."""
+"""Physical per-session ``castord`` supervision for the management plane."""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
+import fcntl
 import os
 import re
-from dataclasses import dataclass, field
+import signal
+import stat
+import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from castor_server.core.aisa_client import AisaOpcode
+from castor_server.core.aisa_client import AisaChannel, AisaClient, AisaOpcode
 
 _VALID_ID = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
-_AGENT_OPCODES = {
-    item.value
-    for item in (
-        AisaOpcode.ADMIT_TURN,
-        AisaOpcode.COMMIT_TURN,
-        AisaOpcode.REGISTER_ACTION,
-        AisaOpcode.PRESENT_ADMISSION_CERTIFICATE,
-        AisaOpcode.RECORD_DISPATCH_ATTEMPT,
-        AisaOpcode.DELIVER_ARMED_ATTEMPT,
-        AisaOpcode.PRESENT_SETTLEMENT_CERTIFICATE,
-        AisaOpcode.PERSIST_FENCE,
-        AisaOpcode.REVOKE_CAPABILITY,
-        AisaOpcode.REPLAY,
-        AisaOpcode.ENSURE_REGION,
-        AisaOpcode.REQUEST_INTERACTION,
-        AisaOpcode.REPORT_OUTCOME,
-        AisaOpcode.CONSUME_INTERACTION,
-    )
-}
-_CONTROL_OPCODES = {
-    item.value
-    for item in (
-        AisaOpcode.GRANT_CAPABILITY,
-        AisaOpcode.REVOKE_CAPABILITY,
-        AisaOpcode.RESOLVE_QUARANTINED_DISPUTE,
-        AisaOpcode.PERSIST_FENCE,
-        AisaOpcode.INSPECT_JOURNAL,
-        AisaOpcode.GET_PROJECTION_SUMMARY,
-    )
-}
+_STARTUP_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -53,14 +26,16 @@ class ManagedCastordSession:
     storage_root: Path
     agent_socket: Path
     control_socket: Path
+    pid: int
 
 
 @dataclass
-class _SessionState:
-    generation: int = 1
-    revoked: set[str] = field(default_factory=set)
-    locked_scopes: set[str] = field(default_factory=set)
-    settlements: dict[int, int] = field(default_factory=dict)
+class _ManagedProcess:
+    session: ManagedCastordSession
+    process: asyncio.subprocess.Process
+    # D-04 recovery opens the live incarnation at generation 2, so the first
+    # supervisor fence must advance it rather than repeat the recovery value.
+    next_generation: int = 3
 
 
 class CastordProcessManager:
@@ -68,164 +43,187 @@ class CastordProcessManager:
 
     _managed: dict[tuple[str, str], CastordProcessManager] = {}
 
-    def __init__(self, *, storage_base: Path) -> None:
+    def __init__(
+        self, *, storage_base: Path, castord_binary: Path | None = None
+    ) -> None:
         self.storage_base = storage_base
-        self._sessions: dict[tuple[str, str], ManagedCastordSession] = {}
-        self._states: dict[tuple[str, str], _SessionState] = {}
-        self._servers: dict[
-            tuple[str, str], tuple[asyncio.AbstractServer, asyncio.AbstractServer]
-        ] = {}
-        self._socket_targets: dict[tuple[str, str], tuple[Path, Path]] = {}
+        self.castord_binary = castord_binary or self._default_castord_binary()
+        self._processes: dict[tuple[str, str], _ManagedProcess] = {}
+        self._management_aisa_call_count = 0
+
+    @staticmethod
+    def _default_castord_binary() -> Path:
+        configured = os.environ.get("CASTORD_BINARY")
+        if configured:
+            return Path(configured)
+        server_root = Path(__file__).resolve().parents[3]
+        return server_root.parent / "castor" / "kernel" / "target" / "debug" / "castord"
 
     @property
     def management_aisa_call_count(self) -> int:
-        return 0
+        return self._management_aisa_call_count
+
+    @staticmethod
+    def _socket_is_live(path: Path) -> bool:
+        return path.exists() and stat.S_ISSOCK(path.stat().st_mode)
+
+    @staticmethod
+    def _probe_writer_lock(root: Path) -> None:
+        """Verify no other writer holds the lock, without retaining the flock."""
+        lock_path = root / ".c01-writer.lock"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise FileExistsError(f"storage writer lock is held: {lock_path}") from exc
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    async def _ensure_binary(self) -> None:
+        if self.castord_binary.is_file():
+            return
+        kernel_dir = self.castord_binary.parents[2]
+        completed = await asyncio.to_thread(
+            subprocess.run,
+            ["cargo", "build", "--bin", "castord"],
+            cwd=kernel_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0 or not self.castord_binary.is_file():
+            raise RuntimeError(f"unable to build castord: {completed.stderr}")
 
     async def provision(self, tenant_id: str, session_id: str) -> ManagedCastordSession:
         if not _VALID_ID.fullmatch(tenant_id) or not _VALID_ID.fullmatch(session_id):
             raise ValueError("tenant_id and session_id must be canonical identifiers")
         key = (tenant_id, session_id)
         root = self.storage_base / "tenants" / tenant_id / "sessions" / session_id
-        session = ManagedCastordSession(
-            tenant_id, session_id, root, root / "ipc.sock", root / "control.sock"
-        )
-        if (
-            key in self._sessions
-            or session.agent_socket.exists()
-            or session.control_socket.exists()
-        ):
+        agent_socket, control_socket = root / "ipc.sock", root / "control.sock"
+        if key in self._processes or agent_socket.exists() or control_socket.exists():
             raise FileExistsError(
                 f"active castord session already exists: {tenant_id}/{session_id}"
             )
         root.mkdir(parents=True, exist_ok=True)
-        self._sessions[key] = session
-        self._states.setdefault(key, _SessionState())
-        digest = hashlib.sha256(str(root).encode()).hexdigest()[:24]
-        socket_dir = Path("/tmp/castor-uds") / digest
-        socket_dir.mkdir(parents=True, exist_ok=True)
-        self._socket_targets[key] = (
-            socket_dir / "ipc.sock",
-            socket_dir / "control.sock",
+        self._probe_writer_lock(root)
+        await self._ensure_binary()
+        process = await asyncio.create_subprocess_exec(
+            str(self.castord_binary),
+            "--storage-root",
+            str(root),
+            "--socket",
+            str(agent_socket),
+            "--control-socket",
+            str(control_socket),
+            "--sandbox",
+            "none",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
-        await self._start_servers(key)
+        await self._wait_ready(process, agent_socket, control_socket)
+        session = ManagedCastordSession(
+            tenant_id, session_id, root, agent_socket, control_socket, process.pid
+        )
+        self._processes[key] = _ManagedProcess(session, process)
         self._managed[key] = self
         return session
 
-    async def _start_servers(self, key: tuple[str, str]) -> None:
-        session, state = self._sessions[key], self._states[key]
-        agent_target, control_target = self._socket_targets[key]
-        agent = await asyncio.start_unix_server(
-            lambda r, w: self._handle(r, w, state, _AGENT_OPCODES),
-            path=str(agent_target),
-        )
-        control = await asyncio.start_unix_server(
-            lambda r, w: self._handle(r, w, state, _CONTROL_OPCODES),
-            path=str(control_target),
-        )
-        os.chmod(agent_target, 0o600)
-        os.chmod(control_target, 0o600)
-        session.agent_socket.symlink_to(agent_target)
-        session.control_socket.symlink_to(control_target)
-        self._servers[key] = (agent, control)
-
-    async def _handle(
+    async def _wait_ready(
         self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-        state: _SessionState,
-        allowed: set[str],
+        process: asyncio.subprocess.Process,
+        agent_socket: Path,
+        control_socket: Path,
     ) -> None:
-        try:
-            size = int.from_bytes(await reader.readexactly(4), "big")
-            if size > 16 * 1024 * 1024:
-                response: dict[str, Any] = {"error_code": "PayloadTooLarge"}
-            else:
-                request = json.loads((await reader.readexactly(size)).decode())
-                response = self._dispatch(
-                    state,
-                    request.get("opcode", ""),
-                    request.get("payload", {}),
-                    allowed,
+        deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if process.returncode is not None:
+                stderr = (
+                    (await process.stderr.read()).decode() if process.stderr else ""
                 )
-        except (UnicodeDecodeError, json.JSONDecodeError, asyncio.IncompleteReadError):
-            response = {"error_code": "InvalidAisaFrame"}
-        encoded = json.dumps(response, separators=(",", ":")).encode()
-        writer.write(len(encoded).to_bytes(4, "big") + encoded)
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
-    @staticmethod
-    def _dispatch(
-        state: _SessionState, opcode: str, payload: dict[str, Any], allowed: set[str]
-    ) -> dict[str, Any]:
-        if opcode not in allowed:
-            return {"error_code": "UnauthorizedOpcode"}
-        if opcode == AisaOpcode.REVOKE_CAPABILITY.value:
-            state.revoked.add(str(payload.get("cap_id", "")))
-        elif opcode == AisaOpcode.PERSIST_FENCE.value:
-            state.generation = max(
-                state.generation + 1, int(payload.get("generation", 0))
-            )
-        elif opcode == AisaOpcode.PRESENT_SETTLEMENT_CERTIFICATE.value:
-            attempt_id = int(payload.get("attempt_id", 0))
-            state.settlements[attempt_id] = state.settlements.get(attempt_id, 0) + 1
-            if state.settlements[attempt_id] > 1:
-                state.locked_scopes.add(
-                    str(payload.get("target_scope", "orbital/burn/delta_v"))
-                )
-        elif opcode == AisaOpcode.RESOLVE_QUARANTINED_DISPUTE.value:
-            state.locked_scopes.clear()
-            return {
-                "persistence_disposition": "EntryPersisted",
-                "journal_entry": "QuarantinedDisputeResolved",
-            }
-        elif opcode == AisaOpcode.PRESENT_ADMISSION_CERTIFICATE.value:
-            if str(payload.get("capability_id", "")) in state.revoked:
-                return {"error_code": "RejectedCapabilityRevoked"}
-            if (
-                "generation" in payload
-                and int(payload["generation"]) < state.generation
+                raise RuntimeError(f"castord exited during startup: {stderr}")
+            if self._socket_is_live(agent_socket) and self._socket_is_live(
+                control_socket
             ):
-                return {"error_code": "RejectedStaleGeneration"}
-            if str(payload.get("target_scope", "")) in state.locked_scopes:
-                return {"error_code": "RejectedScopeLocked"}
-        return {"persistence_disposition": "EntryPersisted"}
+                return
+            await asyncio.sleep(0.01)
+        process.kill()
+        await process.wait()
+        raise TimeoutError("castord did not create both session sockets")
 
-    async def restart(self, tenant_id: str, session_id: str) -> None:
-        key = (tenant_id, session_id)
-        if key not in self._sessions:
-            raise FileNotFoundError(f"unknown session: {tenant_id}/{session_id}")
-        await self._stop_servers(key)
-        self._states[key].locked_scopes.add("orbital/burn/delta_v")
-        await self._start_servers(key)
-
-    async def simulate_management_server_outage(self) -> None:
-        return None
+    def session(self, tenant_id: str, session_id: str) -> ManagedCastordSession:
+        return self._processes[(tenant_id, session_id)].session
 
     def is_managed(self, tenant_id: str, session_id: str) -> bool:
-        return (tenant_id, session_id) in self._servers
+        return (tenant_id, session_id) in self._processes
+
+    async def restart(self, tenant_id: str, session_id: str) -> ManagedCastordSession:
+        key = (tenant_id, session_id)
+        managed = self._processes.get(key)
+        if managed is None:
+            raise FileNotFoundError(f"unknown session: {tenant_id}/{session_id}")
+        await self._reap(key)
+        return await self.provision(tenant_id, session_id)
+
+    async def fence_and_reap(self, tenant_id: str, session_id: str) -> int:
+        key = (tenant_id, session_id)
+        managed = self._processes.get(key)
+        if managed is None:
+            raise FileNotFoundError(f"unknown session: {tenant_id}/{session_id}")
+        response = await self.control_request(
+            tenant_id,
+            session_id,
+            AisaOpcode.PERSIST_FENCE,
+            {"generation": managed.next_generation},
+        )
+        if (
+            response.error_code
+            or response.persistence_disposition != "GenerationFenced"
+        ):
+            raise RuntimeError(f"fence was not persisted: {response}")
+        managed.next_generation += 1
+        return await self._reap(key)
+
+    async def control_request(
+        self,
+        tenant_id: str,
+        session_id: str,
+        opcode: AisaOpcode,
+        payload: dict[str, object],
+        *,
+        request_id: str | None = None,
+    ):
+        """Issue a privileged operation over the daemon's control socket."""
+        managed = self._processes[(tenant_id, session_id)]
+        self._management_aisa_call_count += 1
+        return await AisaClient(
+            managed.session.control_socket, channel=AisaChannel.CONTROL
+        ).request(opcode, payload, request_id=request_id)
+
+    async def simulate_management_server_outage(self) -> None:
+        """Drop only the server's registry; supervised daemons keep running."""
+        for key, manager in tuple(self._managed.items()):
+            if manager is self:
+                self._managed.pop(key, None)
 
     async def cleanup(self, tenant_id: str, session_id: str) -> None:
-        key = (tenant_id, session_id)
-        if key not in self._sessions:
-            return
-        await self._stop_servers(key)
-        self._sessions.pop(key, None)
-        self._states.pop(key, None)
-        self._managed.pop(key, None)
-        self._socket_targets.pop(key, None)
+        if (tenant_id, session_id) in self._processes:
+            await self.fence_and_reap(tenant_id, session_id)
 
-    async def _stop_servers(self, key: tuple[str, str]) -> None:
-        for server in self._servers.pop(key, ()):
-            server.close()
-            await server.wait_closed()
-        for socket in (
-            self._sessions[key].agent_socket,
-            self._sessions[key].control_socket,
-        ):
-            if socket.exists():
+    async def _reap(self, key: tuple[str, str]) -> int:
+        managed = self._processes.pop(key)
+        process = managed.process
+        if process.returncode is None:
+            process.send_signal(signal.SIGTERM)
+            try:
+                await asyncio.wait_for(process.wait(), timeout=1.0)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+        for socket in (managed.session.agent_socket, managed.session.control_socket):
+            if socket.exists() and stat.S_ISSOCK(socket.stat().st_mode):
                 socket.unlink()
-        for socket in self._socket_targets[key]:
-            if socket.exists():
-                socket.unlink()
+        self._managed.pop(key, None)
+        return process.returncode or 0
