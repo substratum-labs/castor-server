@@ -267,11 +267,21 @@ async def test_m3_quarantined_dispute_operator_resolution_unlocks_mutex(
             "target_scope": "scope-1",
         },
     )
+    armed_successor = await agent.request(
+        AisaOpcode.PRESENT_ADMISSION_CERTIFICATE,
+        {
+            "action_id": "action-2",
+            "target_scope": "scope-1",
+            "capability_id": "capability-1",
+            "generation": 1,
+        },
+    )
 
     assert resolved.persistence_disposition == "EntryPersisted"
     journal = await control.request(AisaOpcode.INSPECT_JOURNAL, {})
     assert "QuarantinedDisputeResolved" in str(journal.outcome)
     assert successor.persistence_disposition == "ActionRegistered"
+    assert armed_successor.persistence_disposition == "AttemptArmed"
 
 
 @pytest.mark.asyncio
@@ -452,6 +462,28 @@ async def test_m9_crash_recovery_preserves_quarantine_lock_until_resolved(
 
     assert registered.persistence_disposition == "ActionRegistered"
     assert blocked.persistence_disposition == "RejectedCurrentState"
+
+    control = AisaClient(session.control_socket, channel=AisaChannel.CONTROL)
+    resolved = await control.request(
+        AisaOpcode.RESOLVE_QUARANTINED_DISPUTE,
+        {
+            "attempt_id": 1,
+            "resolution": "NotApplied",
+            "evidence_region_digest": "digest-post-restart",
+            "operator_id": "operator-1",
+        },
+    )
+    assert resolved.persistence_disposition == "EntryPersisted"
+    unblocked = await agent.request(
+        AisaOpcode.PRESENT_ADMISSION_CERTIFICATE,
+        {
+            "action_id": "action-2",
+            "target_scope": "scope-1",
+            "capability_id": "capability-1",
+            "generation": 1,
+        },
+    )
+    assert unblocked.persistence_disposition == "AttemptArmed"
 
 
 @pytest.mark.asyncio
